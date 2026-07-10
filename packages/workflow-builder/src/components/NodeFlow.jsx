@@ -28,7 +28,7 @@ import TextGeneration from "./TextNode";
 import ImageGeneration from "./ImageNode";
 import VideoGeneration from "./VideoNode";
 import { setWorkflowIds } from "./WorkflowStore";
-import { apiNodeModels, audioModels, concatModels, imageModels, textModels, videoModels, videoCombinerModels, presets } from "./utility";
+import { apiNodeModels, audioModels, concatModels, imageModels, referenceModels, textModels, videoModels, videoCombinerModels, presets } from "./utility";
 import Link from "next/link";
 import RenderField from "./RenderField";
 import PromptConcate from "./PromptConcate";
@@ -41,6 +41,7 @@ import NodesNavbar from "./NodesNavbar"
 import ChatWidget from "./ChatWidget";
 import { AiOutlineAudio } from "react-icons/ai";
 import VideoCombiner from "./VideoCombiner";
+import ReferenceNode from "./ReferenceNode";
 import { useGenerationCost } from "./useGenerationCost";
 
 const nodeTypes = {
@@ -50,7 +51,8 @@ const nodeTypes = {
   audioNode: AudioGeneration,
   concatNode: PromptConcate,
   vidConcatNode: VideoCombiner,
-  apiNode: ApiNode
+  apiNode: ApiNode,
+  referenceNode: ReferenceNode
 }
 
 const initialNodes = [
@@ -114,7 +116,7 @@ const getEdgeColor = (sourceHandle, targetHandle, sourceNode = null, targetNode 
   if (sourceNode) {
     const type = sourceNode.type;
     if (type === 'textNode' || type === 'concatNode') return "blue";
-    if (type === 'imageNode') return "green";
+    if (type === 'imageNode' || type === 'referenceNode') return "green";
     if (type === 'videoNode' || type === 'vidConcatNode') return "orange";
     if (type === 'audioNode') return "yellow";
   }
@@ -139,6 +141,53 @@ const SPECIAL_MODEL_NAMES = {
 
 const formatName = (id) => id.replace(/-/g, ' ').split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 
+const localModelsByCategory = {
+  text: textModels,
+  image: imageModels,
+  video: videoModels,
+  audio: audioModels,
+  utility: [...concatModels, ...videoCombinerModels, ...referenceModels],
+  api: apiNodeModels,
+};
+
+const getLocalModel = (category, modelId) => {
+  const localModel = localModelsByCategory[category]?.find((model) => model.id === modelId);
+  if (!localModel) return null;
+  return {
+    ...localModel,
+    name: localModel.name || SPECIAL_MODEL_NAMES[modelId] || formatName(modelId),
+  };
+};
+
+const toOutputValues = (value) => {
+  if (Array.isArray(value)) {
+    return value.filter((item) => typeof item === "string" && item.trim() !== "");
+  }
+  if (typeof value === "string" && value.trim() !== "") return [value];
+  return [];
+};
+
+const getSourceOutputValues = (sourceNode, overrideData = {}) => {
+  const sourceData = { ...(sourceNode?.data || {}), ...overrideData };
+  if (sourceNode?.type === "concatNode") {
+    return toOutputValues(sourceData.formValues?.prompt);
+  }
+
+  const rawValue = sourceData.viewingOutput !== undefined
+    ? sourceData.viewingOutput
+    : (sourceData.resultUrl ?? sourceData.outputs?.[0]?.value ?? null);
+
+  return toOutputValues(rawValue);
+};
+
+const appendUniqueValues = (currentValue, values) => {
+  const list = Array.isArray(currentValue) ? [...currentValue] : [];
+  values.forEach((value) => {
+    if (!list.includes(value)) list.push(value);
+  });
+  return list;
+};
+
 const getModelObjStatic = (category, modelId, nodeSchemas) => {
   if (category === "api") {
     // We can't easily access filteredApiNodeModels statically without passing it, 
@@ -146,11 +195,12 @@ const getModelObjStatic = (category, modelId, nodeSchemas) => {
     // For now, let's just use the shared logic.
     const apiModelsFromBackend = nodeSchemas?.categories?.api?.models ? Object.keys(nodeSchemas.categories.api.models) : [];
     const filtered = apiNodeModels.filter(model => apiModelsFromBackend.includes(model.id));
-    return filtered.find(m => m.id === modelId) || null;
+    return filtered.find(m => m.id === modelId) || getLocalModel(category, modelId);
   }
-  if (!modelId || !nodeSchemas?.categories) return null;
+  if (!modelId) return null;
+  if (!nodeSchemas?.categories) return getLocalModel(category, modelId);
   const rawModel = nodeSchemas.categories[category]?.models?.[modelId];
-  if (!rawModel) return null;
+  if (!rawModel) return getLocalModel(category, modelId);
 
   return {
     ...rawModel,
@@ -160,7 +210,7 @@ const getModelObjStatic = (category, modelId, nodeSchemas) => {
 };
 
 const processWorkflowData = (workflowData, nodeSchemas, id) => {
-  if (!workflowData || !nodeSchemas?.categories) return null;
+  if (!workflowData) return null;
 
   const workflow = workflowData?.data;
   if (!workflow?.nodes) return null;
@@ -168,7 +218,7 @@ const processWorkflowData = (workflowData, nodeSchemas, id) => {
   const restoredNodes = workflow.nodes.map(n => ({
     id: n.id,
     type: n.category === "utility" 
-      ? (n.model === "video-combiner" ? "vidConcatNode" : "concatNode") 
+      ? (n.model === "video-combiner" ? "vidConcatNode" : n.model === "reference-images" ? "referenceNode" : "concatNode") 
       : `${n.category}Node`,
     position: {
       x: n.position?.x ?? 350,
@@ -208,11 +258,11 @@ const processWorkflowData = (workflowData, nodeSchemas, id) => {
       workflowId: id,
       runId: workflowData?.run_id,
       workflowName: workflowData.name,
-      interactionMode: workflowData.is_owner,
-      publishWorkflow: workflowData.is_published,
+      interactionMode: workflowData.is_owner ?? true,
+      publishWorkflow: workflowData.is_published ?? false,
       template: {
-        showTemplateBtn: workflowData.show_temp_button,
-        isPublishedTemplate: workflowData.is_template,
+        showTemplateBtn: workflowData.show_temp_button ?? false,
+        isPublishedTemplate: workflowData.is_template ?? false,
       },
       category: workflowData?.category || "General"
     }
@@ -245,8 +295,8 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
   const [edgePicker, setEdgePicker] = useState(null);
   const connectionMadeRef = useRef(false);
   const onConnectRef = useRef(null);
-  const [interactionMode, setInteractionMode] = useState(initialState?.metadata?.interactionMode || false);
-  const [publishWorkflow, setPublishWorkflow] = useState(initialState?.metadata?.publishWorkflow || false);
+  const [interactionMode, setInteractionMode] = useState(initialState?.metadata?.interactionMode ?? true);
+  const [publishWorkflow, setPublishWorkflow] = useState(initialState?.metadata?.publishWorkflow ?? false);
   const [template, setTemplate] = useState(initialState?.metadata?.template || {
     showTemplateBtn: false,
     isPublishedTemplate: false
@@ -289,9 +339,9 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
       ? Object.keys(nodeSchemas.categories.api.models)
       : [];
 
-  const filteredApiNodeModels = apiNodeModels.filter(model =>
-    apiModelsFromBackend.includes(model.id)
-  );
+  const filteredApiNodeModels = apiModelsFromBackend.length > 0
+    ? apiNodeModels.filter(model => apiModelsFromBackend.includes(model.id))
+    : apiNodeModels;
 
   const loadPreset = (preset) => {
     setIsPresetsDismissed(true);
@@ -352,7 +402,7 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
     const restoredNodes = workflow.nodes.map(n => ({
       id: n.id,
       type: n.category === "utility" 
-        ? (n.model === "video-combiner" ? "vidConcatNode" : "concatNode") 
+        ? (n.model === "video-combiner" ? "vidConcatNode" : n.model === "reference-images" ? "referenceNode" : "concatNode") 
         : `${n.category}Node`,
       position: {
         x: n.position?.x ?? 350,
@@ -392,22 +442,23 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
     setWorkflowName(workflowData.name);
     setWorkflowCategory(workflowData?.category || "General");
     setWorkflowIds(workflowData.workflow_id, workflowData?.run_id);
-    setInteractionMode(workflowData.is_owner);
-    setPublishWorkflow(workflowData.is_published);
+    setInteractionMode(workflowData.is_owner ?? true);
+    setPublishWorkflow(workflowData.is_published ?? false);
     setTemplate(prev => ({
       ...prev,
-      showTemplateBtn: workflowData.show_temp_button,
-      isPublishedTemplate: workflowData.is_template,
+      showTemplateBtn: workflowData.show_temp_button ?? false,
+      isPublishedTemplate: workflowData.is_template ?? false,
     }));
     setIsRestoring(false);
   }, [id, nodeSchemas, getModelObj, setNodes, setEdges]);
 
   useEffect(() => {
-    if (initialWorkflowData && nodeSchemas?.categories) {
+    if (initialWorkflowData) {
+      setIsRestoring(false);
       return;
     }
 
-    if (!id || !nodeSchemas?.categories) return;
+    if (!id) return;
 
     axios.get(`/api/workflow/get-workflow-def/${id}`)
       .then(res => {
@@ -504,7 +555,9 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
 
       if (!connectedEdges.length) return updatedNodes;
 
-      const resultValue = newData.resultUrl || newData.outputs?.[0]?.value;
+      const sourceNodeForData = updatedNodes.find((n) => n.id.toLowerCase().replace(/\s+/g, '') === id.toLowerCase().replace(/\s+/g, ''));
+      const resultValues = getSourceOutputValues(sourceNodeForData, newData);
+      const resultValue = resultValues[0] || "";
       // if (!resultValue) return updatedNodes;
 
       updatedNodes = updatedNodes.map((node) => {
@@ -515,9 +568,8 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
         let updatedFormValues = { ...node.data.formValues };
 
         const sourceNode = updatedNodes.find((n) => n.id === edge.source);
-        const sourceValue = sourceNode?.type === "concatNode"
-          ? sourceNode?.data?.formValues?.prompt
-          : resultValue;
+        const sourceValues = getSourceOutputValues(sourceNode, edge.source === id ? newData : {});
+        const sourceValue = sourceValues[0] || "";
 
         if (["textInput", "imageInput", "videoInput", "audioInput2", "apiInput"].includes(targetHandle)) {
           updatedFormValues.prompt = sourceValue;
@@ -528,19 +580,11 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
         }
 
         else if (["textInput3", "imageInput2", "videoInput6"].includes(targetHandle)) {
-          const list = Array.isArray(updatedFormValues.images_list)
-            ? [...updatedFormValues.images_list]
-            : [];
-          if (!list.includes(resultValue) && resultValue && resultValue.trim() !== "") list.push(resultValue);
-          updatedFormValues.images_list = list;
+          updatedFormValues.images_list = appendUniqueValues(updatedFormValues.images_list, sourceValues);
         }
 
         else if (targetHandle === "apiInput2") {
-          const list = Array.isArray(updatedFormValues.images)
-            ? [...updatedFormValues.images]
-            : [];
-          if (!list.includes(resultValue) && resultValue && resultValue.trim() !== "") list.push(resultValue);
-          updatedFormValues.images = list;
+          updatedFormValues.images = appendUniqueValues(updatedFormValues.images, sourceValues);
         }
 
         else if (["textInput2", "videoInput2", "imageInput3", "audioInput3"].includes(targetHandle)) {
@@ -586,13 +630,7 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
           const isList = listFields.includes(targetHandle) || node.data.taskData?.[targetHandle]?.type === "array";
 
           if (isList) {
-            const list = Array.isArray(updatedFormValues[targetHandle])
-              ? [...updatedFormValues[targetHandle]]
-              : [];
-            if (sourceValue && sourceValue.trim() !== "" && !list.includes(sourceValue)) {
-              list.push(sourceValue);
-            }
-            updatedFormValues[targetHandle] = list;
+            updatedFormValues[targetHandle] = appendUniqueValues(updatedFormValues[targetHandle], sourceValues);
           } else {
             updatedFormValues[targetHandle] = sourceValue;
           }
@@ -629,7 +667,7 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
 
         const concatValues = allConcatEdges.map((e) => {
           const sourceNode = updatedNodes.find((n) => n.id === e.source);
-          return sourceNode?.data?.resultUrl || sourceNode?.data?.outputs?.[0]?.value || "";
+          return getSourceOutputValues(sourceNode)[0] || "";
         }).filter((v) => typeof v === "string" && v.trim() !== "");
 
         return {
@@ -694,15 +732,11 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
         const newEdges = addEdge({ ...params, style: edgeStyles[color] }, eds);
         if (!sourceNode || !targetNode || !sourceNode.data) return newEdges;
 
-        const sourceData = sourceNode.data;
-        const resultValue = sourceData.viewingOutput !== undefined
-          ? sourceData.viewingOutput
-          : (sourceData.resultUrl || sourceData.outputs?.[0]?.value || null);
+        const sourceValues = getSourceOutputValues(sourceNode);
+        const resultValue = sourceValues[0] || null;
         // if (!resultValue || resultValue.trim() === "") return newEdges;
 
-        const sourceValue = sourceNode?.type === "concatNode"
-          ? sourceNode?.data?.formValues?.prompt
-          : resultValue;
+        const sourceValue = sourceValues[0] || "";
 
         setNodes((prev) =>
           prev.map((n) => {
@@ -715,11 +749,7 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
               const isList = listFields.includes(params.targetHandle) || n.data.taskData?.[params.targetHandle]?.type === "array";
 
               if (isList) {
-                const list = Array.isArray(updatedFormValues[params.targetHandle]) ? [...updatedFormValues[params.targetHandle]] : [];
-                if (sourceValue && sourceValue.trim() !== "" && !list.includes(sourceValue)) {
-                  list.push(sourceValue);
-                }
-                updatedFormValues[params.targetHandle] = list;
+                updatedFormValues[params.targetHandle] = appendUniqueValues(updatedFormValues[params.targetHandle], sourceValues);
               } else {
                 updatedFormValues[params.targetHandle] = sourceValue;
               }
@@ -734,7 +764,7 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
                 const concatValues = allConcatEdges.map((e) => {
                   if (e.source === params.source) return resultValue;
                   const sourceNode = prev.find((node) => node.id === e.source);
-                  return sourceNode?.data?.resultUrl || sourceNode?.data?.outputs?.[0]?.value || "";
+                  return getSourceOutputValues(sourceNode)[0] || "";
                 }).filter(v => v);
 
                 updatedFormValues.prompt = concatValues.join(" ");
@@ -752,17 +782,9 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
               if (["textInput2", "videoInput2", "imageInput3", "audioInput3"].includes(params.targetHandle)) {
                 updatedFormValues.image_url = resultValue || null;
               } else if (["textInput3", "imageInput2", "videoInput6"].includes(params.targetHandle)) {
-                const list = Array.isArray(updatedFormValues.images_list) ? [...updatedFormValues.images_list] : [];
-                if (!list.includes(resultValue) && resultValue && resultValue.trim() !== "") {
-                  list.push(resultValue);
-                }
-                updatedFormValues.images_list = list;
+                updatedFormValues.images_list = appendUniqueValues(updatedFormValues.images_list, sourceValues);
               } else if (params.targetHandle === "apiInput2") {
-                const list = Array.isArray(updatedFormValues.images) ? [...updatedFormValues.images] : [];
-                if (!list.includes(resultValue) && resultValue && resultValue.trim() !== "") {
-                  list.push(resultValue);
-                }
-                updatedFormValues.images = list;
+                updatedFormValues.images = appendUniqueValues(updatedFormValues.images, sourceValues);
               } else if (params.targetHandle === "videoInput3") {
                 updatedFormValues.last_image = resultValue || null;
               } else if (params.targetHandle === "apiInput3") {
@@ -859,7 +881,7 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
 
               return {
                 id: newId,
-                type: n.category === "utility" ? (n.model === "video-combiner" ? "vidConcatNode" : "concatNode") : `${n.category}Node`,
+                type: n.category === "utility" ? (n.model === "video-combiner" ? "vidConcatNode" : n.model === "reference-images" ? "referenceNode" : "concatNode") : `${n.category}Node`,
                 position: existingNode?.position || {
                   x: n.position?.x ?? 350,
                   y: n.position?.y ?? 0
@@ -892,7 +914,7 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
 
                 if ((!sourceHandle || sourceHandle === 'output') && sourceNode) {
                   if (sourceNode.type === 'textNode') sourceHandle = 'textOutput';
-                  else if (sourceNode.type === 'imageNode') sourceHandle = 'imageOutput';
+                  else if (sourceNode.type === 'imageNode' || sourceNode.type === 'referenceNode') sourceHandle = 'imageOutput';
                   else if (sourceNode.type === 'videoNode') sourceHandle = 'videoOutput';
                   else if (sourceNode.type === 'audioNode') sourceHandle = 'audioOutput';
                   else if (sourceNode.type === 'concatNode') sourceHandle = 'concatOutput';
@@ -1064,7 +1086,8 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
       const inputNodes = connectedEdges.map((e) => e.source);
       const category = node.type === "textNode" ? "text" : node.type === "imageNode" ? "image" : node.type === "videoNode" ? "video" : node.type === "apiNode" ? "api" : node.type === "audioNode" ? "audio" : "utility";
       const isVideoCombiner = node.type === "vidConcatNode";
-      const model = node.data?.selectedModel?.id ? node.data?.selectedModel?.id : category === "utility" ? (isVideoCombiner ? "video-combiner" : "prompt-concatenator") : `${category}-passthrough`;
+      const isReferenceNode = node.type === "referenceNode";
+      const model = node.data?.selectedModel?.id ? node.data?.selectedModel?.id : category === "utility" ? (isVideoCombiner ? "video-combiner" : isReferenceNode ? "reference-images" : "prompt-concatenator") : `${category}-passthrough`;
       const modelSchema = nodeSchemas?.categories?.[category]?.models?.[model]?.input_schema?.schemas?.input_data;
       const inputSchema = modelSchema?.properties || {};
       const wavespeedSchema = nodeSchemas?.categories?.api?.models?.[model]?.input_schema;
@@ -1232,6 +1255,10 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
             params.params[key] = meta?.default ?? null;
           }
         }
+      } else if (node.type === "referenceNode") {
+        params = {
+          images_list: formValues.images_list || [],
+        };
       } else if (node.type === "vidConcatNode") {
         const vcSchema = videoCombinerSchema || { videos_list: { default: [] }, aspect_ratio: { default: "auto" } };
         for (const [key, meta] of Object.entries(vcSchema)) {
@@ -1264,7 +1291,7 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
           resultUrl: node.data?.resultUrl || "",
           outputs: node.data?.outputs || [],
         }
-      } else if (["imageNode", "videoNode", "audioNode", "apiNode", "concatNode", "vidConcatNode"].includes(node.type)) {
+      } else if (["imageNode", "videoNode", "audioNode", "apiNode", "concatNode", "vidConcatNode", "referenceNode"].includes(node.type)) {
         output_params = {
           resultUrl: node.data?.resultUrl || null,
           outputs: node.data?.outputs || [],
@@ -1388,7 +1415,7 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
                   const nodeIdMatch = id.toLowerCase().replace(/\s+/g, '') === node.id.toLowerCase().replace(/\s+/g, '');
                   if (!nodeIdMatch || !result) return node;
 
-                  if (["textNode", "imageNode", "videoNode", "audioNode", "concatNode", "apiNode", "vidConcatNode"].includes(node.type)) {
+                  if (["textNode", "imageNode", "videoNode", "audioNode", "concatNode", "apiNode", "vidConcatNode", "referenceNode"].includes(node.type)) {
                     const currentHistory = node.data.outputHistory || [];
                     const isAlreadyInHistory = currentHistory.some(h => h.result?.id === result.id);
                     const newHistory = isAlreadyInHistory
@@ -1832,6 +1859,7 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
         apiNode: ["apiInput", "apiInput2", "apiInput3"],
         concatNode: ["concatInput"],
         vidConcatNode: ["videoInput7"],
+        referenceNode: [],
       };
 
       const sourceHandleColor = handleTypesMap[edgePicker.sourceHandleId];
@@ -1852,6 +1880,7 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
       const nodeTypeToHandles = {
         textNode: ["textOutput"],
         imageNode: ["imageOutput"],
+        referenceNode: ["imageOutput"],
         videoNode: ["videoOutput"],
         audioNode: ["audioOutput"],
         apiNode: ["apiOutput"],
@@ -1898,7 +1927,7 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
     } else {
       const compatibilityMap = {
         blue: ['textNode', 'concatNode', 'apiNode'],
-        green: ['imageNode', 'apiNode'],
+        green: ['imageNode', 'referenceNode', 'apiNode'],
         orange: ['videoNode', 'vidConcatNode'],
         yellow: ['audioNode']
       };
@@ -2405,7 +2434,7 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
           })()}
         </ReactFlow>
       </div>
-      {selectedNode && !["concatNode"].includes(selectedNode.type) && (
+      {selectedNode && !["concatNode", "referenceNode"].includes(selectedNode.type) && (
         <div className="absolute right-2 top-16 z-50 w-80 h-full max-h-[90%] bg-[#09090b]/80 backdrop-blur-xl border border-white/20 rounded-2xl flex transition-all duration-300 ease-in-out shadow-2xl">
           <button
             type="button"

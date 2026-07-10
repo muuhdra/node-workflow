@@ -703,6 +703,30 @@ export const videoCombinerModels = [
   }
 ];
 
+export const referenceModels = [
+  {
+    id: "reference-images",
+    name: "Reference Images",
+    input_params: {
+      properties: {
+        "images_list": {
+          "examples": [],
+          "description": "Locked visual references used to keep style, mood, colors, and composition coherent across generations.",
+          "field": "images_list",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "title": "Reference Images",
+          "name": "images_list",
+          "maxItems": 10
+        }
+      },
+      required: ["images_list"],
+    }
+  }
+];
+
 export const apiNodeModels = [
   {
     id: "wavespeed",
