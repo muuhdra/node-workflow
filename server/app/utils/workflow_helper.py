@@ -265,6 +265,11 @@ async def get_file_upload_url_helper(params: dict):
     return await proxy_request_helper("GET", url)
 
 
+async def calculate_dynamic_cost_helper(payload: dict):
+    url = "https://api.muapi.ai/app/calculate_dynamic_cost"
+    return await proxy_request_helper("POST", url, payload)
+
+
 async def architect_workflow_helper(payload: dict):
     url = "https://api.muapi.ai/workflow/architect"
     return await proxy_request_helper("POST", url, payload)

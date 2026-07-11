@@ -23,7 +23,9 @@ export const useGenerationCost = (selectedModel, formValues) => {
         setIsRefreshingCost(false);
       })
       .catch((error) => {
-        console.error("Error fetching cost:", error);
+        if (error.response?.status !== 404) {
+          console.warn("Unable to fetch generation cost:", error.response?.data || error.message);
+        }
         setGenerationCost(null);
         setIsRefreshingCost(false);
       });
