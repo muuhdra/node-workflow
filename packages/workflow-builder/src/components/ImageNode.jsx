@@ -22,9 +22,14 @@ const outputHandles = [
 
 const ImageGeneration = ({ id, data, selected }) => {
   const models = useMemo(() => {
-    return data.nodeSchemas?.categories?.image?.models 
-      ? Object.values(data.nodeSchemas.categories.image.models) 
+    const schemaModels = data.nodeSchemas?.categories?.image?.models
+      ? Object.entries(data.nodeSchemas.categories.image.models).map(([modelId, model]) => ({
+        ...model,
+        id: model.id || modelId,
+      }))
       : [];
+
+    return schemaModels;
   }, [data.nodeSchemas]);
   
   const [selectedModel, setSelectedModel] = useState(data.selectedModel || models[1] || models[0] || {});
@@ -244,10 +249,6 @@ const ImageGeneration = ({ id, data, selected }) => {
   };
 
   const handleRunSingleNode = async () => {
-    if (!runId) {
-      toast.error("No run_id available!. Click 'Run All' button");
-      return;
-    }
     try {
       data.onDataChange(id, { isLoading: true });
       const workflow_id = await data.handleSaveWorkFlow();
@@ -285,8 +286,13 @@ const ImageGeneration = ({ id, data, selected }) => {
       pollNodeStatus(response.data.run_id);
     } catch(error) {
       data.onDataChange(id, { isLoading: false });
-      toast.error(error.response?.data?.detail || "Error running node");
-      console.error(error);
+      const detail = error.response?.data?.detail || "Error running node";
+      toast.error(detail);
+      console.warn("Image generation failed", {
+        status: error.response?.status,
+        detail,
+        model: selectedModel.id,
+      });
     };
   };
 
@@ -489,7 +495,10 @@ const ImageGeneration = ({ id, data, selected }) => {
       ? `${formValues[widthKey] === formValues[heightKey] ? "1:1" : "custom"}`
       : properties?.[aspectRatioKey]?.default || "1:1"
   );
-  const modelLabel = selectedModel?.name?.replace(/ Image| Text to Image| Generate/gi, "").trim() || "Flux.1";
+  const isAspectMenuOpen = dropDown === "aspect";
+  const hasAspectControl = Boolean(
+    getFirstField("aspect_ratio", "ratio", "size") || (widthKey && heightKey)
+  );
   const stopNodeDrag = (event) => event.stopPropagation();
   const changeCount = (delta) => {
     handleChange(countKey, Math.min(10, Math.max(1, countValue + delta)));
@@ -522,11 +531,6 @@ const ImageGeneration = ({ id, data, selected }) => {
       }))
     );
   };
-  const chooseModel = (model) => {
-    setSelectedModel(model);
-    setDropDown(0);
-  };
-
   const visibilityClasses = selected
     ? "pointer-events-auto opacity-100"
     : "pointer-events-none opacity-0";
@@ -556,7 +560,7 @@ const ImageGeneration = ({ id, data, selected }) => {
     return (
       <div
         key={handle.id}
-        className={`group/handle absolute -left-16 z-20 flex h-[52px] w-[52px] items-center justify-center rounded-full transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 ${visibilityClasses}`}
+        className={`group/handle absolute -left-16 z-20 flex h-[52px] w-[52px] items-center justify-center rounded-full transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 ${connected ? "pointer-events-auto opacity-100" : visibilityClasses}`}
         style={{ top: 455 + index * 76 }}
       >
         <Handle
@@ -587,7 +591,7 @@ const ImageGeneration = ({ id, data, selected }) => {
     const classes = colorClasses.green;
     return (
       <div
-        className={`group/handle absolute -right-16 top-8 z-20 flex h-[52px] w-[52px] items-center justify-center rounded-full transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 ${visibilityClasses}`}
+        className={`group/handle absolute -right-16 top-8 z-20 flex h-[52px] w-[52px] items-center justify-center rounded-full transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 ${connected ? "pointer-events-auto opacity-100" : visibilityClasses}`}
       >
         <Handle
           type="source"
@@ -616,7 +620,7 @@ const ImageGeneration = ({ id, data, selected }) => {
     <div
       style={{ '--loader-color': '#10b981' }}
       className={`
-        nowheel group relative flex w-[700px] flex-col rounded-[32px] border-[3px]
+        nowheel group relative flex w-[720px] flex-col rounded-[32px] border-[3px]
         bg-[#151515]/95 text-zinc-100 shadow-2xl transition-all duration-300 ease-in-out
         ${selected
           ? "border-emerald-500 shadow-[0_0_32px_rgba(16,185,129,0.24)] ring-2 ring-emerald-500/25"
@@ -702,7 +706,7 @@ const ImageGeneration = ({ id, data, selected }) => {
       </div>
 
       {currentModelId === "image-passthrough" ? (
-        <div className="min-h-[620px] w-full flex-1 overflow-hidden rounded-[29px]">
+        <div className="flex min-h-[620px] w-full flex-1 overflow-hidden rounded-[29px]">
           <UploadNode id={id} data={data} formValues={formValues} setFormValues={setFormValues} selectedModel={selectedModel} loading={loading} uploadType="upload" acceptType="image" />
         </div>
       ) : (
@@ -819,45 +823,8 @@ const ImageGeneration = ({ id, data, selected }) => {
                   +
                 </button>
               </div>
-              <div className="relative">
-                {dropDown === "model" && (
-                  <div
-                    className="nodrag nowheel absolute bottom-full left-1/2 z-40 mb-3 flex max-h-72 min-w-56 -translate-x-1/2 flex-col gap-1 overflow-y-auto rounded-2xl border border-white/10 bg-[#111111]/95 p-1.5 shadow-2xl backdrop-blur-xl"
-                    onPointerDown={stopNodeDrag}
-                  >
-                    {models.filter((model) => !model.id?.includes("passthrough")).map((model) => (
-                      <button
-                        key={model.id}
-                        type="button"
-                        onPointerDown={stopNodeDrag}
-                        onClick={() => chooseModel(model)}
-                        className={`h-9 rounded-xl px-4 text-left text-sm font-bold transition ${
-                          selectedModel.id === model.id
-                            ? "bg-white text-zinc-950"
-                            : "text-zinc-300 hover:bg-white/10 hover:text-white"
-                        }`}
-                      >
-                        {model.name}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                <button
-                  type="button"
-                  onPointerDown={stopNodeDrag}
-                  onClick={() => setDropDown((current) => current === "model" ? 0 : "model")}
-                  className={`nodrag nowheel flex h-11 w-56 items-center justify-between gap-2 rounded-full px-6 text-base font-black transition ${
-                    dropDown === "model"
-                      ? "bg-zinc-200 text-zinc-950"
-                      : "bg-[#242424]/95 text-zinc-300 hover:bg-[#303030] hover:text-white"
-                  }`}
-                >
-                  <span className="truncate">{modelLabel}</span>
-                  <FaAngleDown size={13} className={`flex-none transition ${dropDown === "model" ? "rotate-180" : ""}`} />
-                </button>
-              </div>
-              <div className="relative">
-                {dropDown === "aspect" && (
+              {hasAspectControl && <div className="relative">
+                {isAspectMenuOpen && (
                   <div
                     className="nodrag nowheel absolute bottom-full left-1/2 z-40 mb-3 flex min-w-full -translate-x-1/2 flex-col gap-1 rounded-2xl border border-white/10 bg-[#111111]/95 p-1.5 shadow-2xl backdrop-blur-xl"
                     onPointerDown={stopNodeDrag}
@@ -884,16 +851,16 @@ const ImageGeneration = ({ id, data, selected }) => {
                   onPointerDown={stopNodeDrag}
                   onClick={() => setDropDown((current) => current === "aspect" ? 0 : "aspect")}
                   className={`nodrag nowheel flex h-11 w-36 flex-none items-center justify-center gap-2 rounded-full px-6 text-base font-black transition ${
-                    dropDown === "aspect"
-                      ? "bg-zinc-200 text-zinc-950"
+                    isAspectMenuOpen
+                      ? "bg-[#303030] text-white ring-1 ring-emerald-400/35"
                       : "bg-[#242424]/95 text-zinc-300 hover:bg-[#303030] hover:text-white"
                   }`}
                 >
-                  <span className={`inline-block h-3 w-3 rounded-[3px] border ${dropDown === "aspect" ? "border-zinc-800" : "border-zinc-400"}`} />
+                  <span className={`inline-block h-3 w-3 rounded-[3px] border ${isAspectMenuOpen ? "border-white" : "border-zinc-400"}`} />
                   {String(aspectRatioValue || "1:1")}
-                  <FaAngleDown size={13} className={`transition ${dropDown === "aspect" ? "rotate-180" : ""}`} />
+                  <FaAngleDown size={13} className={`transition ${isAspectMenuOpen ? "rotate-180" : ""}`} />
                 </button>
-              </div>
+              </div>}
               <button
                 type="button"
                 onPointerDown={stopNodeDrag}

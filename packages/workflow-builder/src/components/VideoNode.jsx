@@ -1,7 +1,7 @@
 import { downloadFile, videoModels } from "./utility";
 import React, { useEffect, useMemo, useState, useRef } from "react";
 import { BsArrowUpCircleFill } from "react-icons/bs";
-import { IoImageOutline, IoImagesOutline, IoSettingsOutline, IoTimeOutline, IoVideocamOutline, IoTrashOutline, IoPlay, IoPause, IoVolumeHigh, IoVolumeMute } from "react-icons/io5";
+import { IoImageOutline, IoImagesOutline, IoSettingsOutline, IoVideocamOutline, IoTrashOutline, IoPlay, IoPause, IoVolumeHigh, IoVolumeMute } from "react-icons/io5";
 import { Handle, Position, useReactFlow, useStore, useUpdateNodeInternals } from "reactflow";
 import { getRunId, getWorkflowId } from "./WorkflowStore";
 import axios from "axios";
@@ -14,6 +14,7 @@ import { FaAngleDown, FaAngleLeft, FaAngleRight } from "react-icons/fa6";
 import NodeOptionsMenu from "./NodeOptionsMenu";
 import { useGenerationCost } from "./useGenerationCost";
 import VideoPlayer from "./VideoPlayer";
+import { getModelInputProperties, getVideoInputHandles } from "./connectionState";
 
 const inputHandles = [
   "videoInput",   // prompt
@@ -57,7 +58,9 @@ const VideoGeneration = ({ id, data, selected }) => {
   const { setNodes, setEdges } = useReactFlow();
   const updateNodeInternals = useUpdateNodeInternals();
   const edges = useStore((state) => state.edges);
-  const properties = nodeSchemas?.categories?.video?.models?.[selectedModel.id]?.input_schema?.schemas?.input_data?.properties;
+  const currentModelId = selectedModel?.id || data.selectedModel?.id || "";
+  const properties = getModelInputProperties(selectedModel, nodeSchemas, "video");
+  const validVideoInputHandles = getVideoInputHandles(properties, currentModelId);
   const { generationCost, isRefreshingCost } = useGenerationCost(selectedModel, formValues);
   
   useEffect(() => {
@@ -154,7 +157,7 @@ const VideoGeneration = ({ id, data, selected }) => {
       addFormValuesInTaskData(properties);
     }
     setLoading(0);
-  }, [selectedModel]);
+  }, [selectedModel, properties]);
 
   useEffect(() => {
     if (data.selectedModel) {
@@ -267,10 +270,6 @@ const VideoGeneration = ({ id, data, selected }) => {
   };
 
   const handleRunSingleNode = async () => {
-    if (!runId) {
-      toast.error("No run_id available!. Click 'Run All' button");
-      return;
-    }
     try {
       data.onDataChange(id, { isLoading: true });
       const workflow_id = await data.handleSaveWorkFlow();
@@ -321,38 +320,15 @@ const VideoGeneration = ({ id, data, selected }) => {
     };
   };
 
-  const currentModelId = selectedModel?.id || data.selectedModel?.id || "";
   const isGeneratorModel = !currentModelId.includes("passthrough");
-  const hasPrompt = isGeneratorModel && (properties ? "prompt" in properties : true);
-  const hasImagesList = isGeneratorModel;
-  const hasVideosList = isGeneratorModel && (properties ? ("videos_list" in properties || "video_files" in properties) : false);
-  const hasLastImage = isGeneratorModel;
-  const hasImageUrl = isGeneratorModel;
-  const hasVideoUrl = isGeneratorModel;
-  const hasAudioUrl = isGeneratorModel;
-  const hasAudiosList = isGeneratorModel && (properties ? ("audios_list" in properties || "audio_files" in properties) : false);
-
-  useEffect(() => {
-    if (!isGeneratorModel) return;
-
-    setFormValues((prev) => {
-      const defaults = {
-        prompt: "",
-        image_url: "",
-        last_image: "",
-        images_list: [],
-        video_url: "",
-        audio_url: "",
-        aspect_ratio: "16:9",
-        duration: 5,
-        num_outputs: 1,
-        sound: false,
-        camera_fixed: false,
-      };
-      const hasMissingDefault = Object.keys(defaults).some((key) => !(key in prev));
-      return hasMissingDefault ? { ...defaults, ...prev } : prev;
-    });
-  }, [isGeneratorModel, properties]);
+  const hasPrompt = validVideoInputHandles.includes("videoInput");
+  const hasImageUrl = validVideoInputHandles.includes("videoInput2");
+  const hasLastImage = validVideoInputHandles.includes("videoInput3");
+  const hasVideoUrl = validVideoInputHandles.includes("videoInput4");
+  const hasAudioUrl = validVideoInputHandles.includes("videoInput5");
+  const hasImagesList = validVideoInputHandles.includes("videoInput6");
+  const hasVideosList = validVideoInputHandles.includes("videoInput7");
+  const hasAudiosList = validVideoInputHandles.includes("videoInput8");
 
   useEffect(() => {
     const timeout = setTimeout(() => {
@@ -471,6 +447,11 @@ const VideoGeneration = ({ id, data, selected }) => {
   const countKey = getFirstField("num_outputs", "num_videos", "n", "batch_size") || "num_outputs";
   const soundKey = getFirstField("sound", "enable_audio", "generate_audio", "audio") || "sound";
   const cameraFixedKey = getFirstField("camera_fixed", "fixed_camera") || "camera_fixed";
+  const hasCountControl = Boolean(getFirstField("num_outputs", "num_videos", "n", "batch_size"));
+  const hasQualityControl = Boolean(getFirstField("quality", "resolution", "mode"));
+  const hasAspectControl = Boolean(getFirstField("aspect_ratio", "ratio", "size"));
+  const hasDurationControl = Boolean(getFirstField("duration", "duration_seconds", "length", "video_length"));
+  const hasSoundControl = Boolean(getFirstField("sound", "enable_audio", "generate_audio", "audio"));
   const qualityOptions = properties?.[qualityKey]?.enum || ["basic", "standard", "high"];
   const aspectRatioOptions = properties?.[aspectRatioKey]?.enum || ["16:9", "9:16", "1:1", "4:3"];
   const durationOptions = properties?.[durationKey]?.enum || [5, 6, 8, 10];
@@ -536,7 +517,7 @@ const VideoGeneration = ({ id, data, selected }) => {
   );
 
   const leftHandles = [
-    { id: "videoInput", label: "Text", icon: <IoTimeOutline size={18} />, color: "blue", enabled: hasPrompt },
+    { id: "videoInput", label: "Text", icon: <span className="text-lg font-black leading-none">T</span>, color: "blue", enabled: hasPrompt },
     { id: "videoInput2", label: "Start image", icon: <IoImageOutline size={18} />, color: "green", enabled: hasImageUrl },
     { id: "videoInput3", label: "End image", icon: <IoImageOutline size={18} />, color: "green", enabled: hasLastImage },
     { id: "videoInput6", label: "References", icon: <IoImagesOutline size={18} />, color: "green", enabled: hasImagesList },
@@ -583,7 +564,7 @@ const VideoGeneration = ({ id, data, selected }) => {
       <div
         key={handle.id}
         className={`group/handle absolute -left-16 z-20 flex h-[52px] w-[52px] items-center justify-center rounded-full transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 ${
-          selected ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
+          selected || connected ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
         }`}
         style={{ top: 190 + index * 70 }}
       >
@@ -617,7 +598,7 @@ const VideoGeneration = ({ id, data, selected }) => {
       <div
         key={handle.id}
         className={`group/handle absolute -right-16 z-20 flex h-[52px] w-[52px] items-center justify-center rounded-full transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 ${
-          selected ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
+          selected || connected ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
         }`}
         style={{ top: 38 + index * 78 }}
       >
@@ -807,7 +788,7 @@ const VideoGeneration = ({ id, data, selected }) => {
               />
             )}
             <div className="flex flex-wrap items-center gap-3">
-              <div className="nodrag nowheel flex h-11 items-center gap-4 rounded-full bg-[#242424]/95 px-4 text-base font-black text-zinc-300">
+              {hasCountControl && <div className="nodrag nowheel flex h-11 items-center gap-4 rounded-full bg-[#242424]/95 px-4 text-base font-black text-zinc-300">
                 <button
                   type="button"
                   onPointerDown={stopNodeDrag}
@@ -825,8 +806,8 @@ const VideoGeneration = ({ id, data, selected }) => {
                 >
                   +
                 </button>
-              </div>
-              <div className="relative">
+              </div>}
+              {hasQualityControl && <div className="relative">
                 {renderChoiceMenu("quality", qualityKey, qualityOptions, qualityValue)}
                 <button
                   type="button"
@@ -841,8 +822,8 @@ const VideoGeneration = ({ id, data, selected }) => {
                   {String(qualityValue || "basic")}
                   <FaAngleDown size={13} className={`transition ${dropDown === "quality" ? "rotate-180" : ""}`} />
                 </button>
-              </div>
-              <div className="relative">
+              </div>}
+              {hasAspectControl && <div className="relative">
                 {renderChoiceMenu("aspect", aspectRatioKey, aspectRatioOptions, aspectRatioValue)}
                 <button
                   type="button"
@@ -858,8 +839,8 @@ const VideoGeneration = ({ id, data, selected }) => {
                   {String(aspectRatioValue || "16:9")}
                   <FaAngleDown size={13} className={`transition ${dropDown === "aspect" ? "rotate-180" : ""}`} />
                 </button>
-              </div>
-              <div className="relative">
+              </div>}
+              {hasDurationControl && <div className="relative">
                 {renderChoiceMenu("duration", durationKey, durationOptions, durationValue)}
                 <button
                   type="button"
@@ -874,8 +855,8 @@ const VideoGeneration = ({ id, data, selected }) => {
                   {String(durationValue || 5)}
                   <FaAngleDown size={13} className={`transition ${dropDown === "duration" ? "rotate-180" : ""}`} />
                 </button>
-              </div>
-              <button
+              </div>}
+              {hasSoundControl && <button
                 type="button"
                 onPointerDown={stopNodeDrag}
                 onClick={() => setFieldValue(soundKey, !soundValue)}
@@ -889,7 +870,7 @@ const VideoGeneration = ({ id, data, selected }) => {
                   <span className={`block h-5 w-5 rounded-full transition ${soundValue ? "translate-x-5 bg-zinc-950" : "translate-x-0 bg-white"}`} />
                 </span>
                 Sound
-              </button>
+              </button>}
               <div className="relative">
                 <button
                   type="button"

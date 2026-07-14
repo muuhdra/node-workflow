@@ -27,7 +27,7 @@ pip install -r requirements.txt
 
 Start the development server:
 ```bash
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 The API will be available at:

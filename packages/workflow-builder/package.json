@@ -9,7 +9,8 @@
   ],
   "scripts": {
     "build:css": "tailwindcss -i ./src/tailwind.css -o ./dist/tailwind.css --minify",
-    "build": "npm run build:css && babel src --out-dir dist --extensions .js,.jsx"
+    "build": "npm run build:css && babel src --out-dir dist --extensions .js,.jsx",
+    "test:connections": "npm run build && node --test tests/connectionState.test.cjs"
   },
   "license": "MIT",
   "dependencies": {

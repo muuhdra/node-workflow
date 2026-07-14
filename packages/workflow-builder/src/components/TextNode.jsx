@@ -1,11 +1,10 @@
 import React, { useEffect, useMemo, useState, useRef } from "react";
 import { Handle, Position, useReactFlow, useStore, useUpdateNodeInternals } from "reactflow";
 import { FaAngleLeft, FaAngleRight } from "react-icons/fa6";
-import { textModels } from "./utility";
 import axios from "axios";
 import { getRunId, getWorkflowId } from "./WorkflowStore";
 import { toast } from "react-hot-toast";
-import { IoClose, IoTrashOutline } from "react-icons/io5";
+import { IoImageOutline, IoPlay, IoSettingsOutline, IoTrashOutline } from "react-icons/io5";
 import UploadNode from "./UploadNode"
 import { TfiText } from "react-icons/tfi";
 import NodeSendButton from "./NodeSendButton";
@@ -420,135 +419,219 @@ const TextGeneration = ({ id, data, selected }) => {
     }
   }, [currentOutput, currentHistoryIndex, selectedModel.name]);
 
+  const currentModelId = selectedModel?.id || data.selectedModel?.id || "";
+  const isGeneratorModel = !currentModelId.includes("passthrough");
+  const promptValue = formValues.prompt || "";
+  const stopNodeDrag = (event) => event.stopPropagation();
+  const visibilityClasses = selected
+    ? "pointer-events-auto opacity-100"
+    : "pointer-events-none opacity-0";
+  const openPropertiesPanel = () => {
+    data.openPropertiesPanel?.(id);
+    setNodes((nds) =>
+      nds.map((node) => ({
+        ...node,
+        selected: node.id === id,
+      }))
+    );
+  };
+
+  const colorClasses = {
+    blue: {
+      active: "!bg-blue-500 !border-blue-300 text-white shadow-[0_0_18px_rgba(59,130,246,0.75)]",
+      idle: "!bg-[#252525] !border-[#252525] text-zinc-300 hover:!border-blue-400",
+      label: "text-blue-400",
+    },
+    green: {
+      active: "!bg-emerald-500 !border-emerald-300 text-white shadow-[0_0_18px_rgba(16,185,129,0.75)]",
+      idle: "!bg-[#252525] !border-[#252525] text-zinc-300 hover:!border-emerald-400",
+      label: "text-emerald-400",
+    },
+  };
+
+  const inputHandleItems = [
+    { id: "textInput", label: "Text", icon: <span className="text-lg font-black leading-none">T</span>, color: "blue", enabled: hasPrompt },
+    { id: "textInput2", label: "Image", icon: <IoImageOutline size={22} />, color: "green", enabled: hasImageUrl },
+    { id: "textInput3", label: "References", icon: <IoImageOutline size={22} />, color: "green", enabled: hasImagesList },
+    { id: "textInput4", label: "System", icon: <TfiText size={20} />, color: "blue", enabled: hasSystemPrompt },
+  ].filter((handle) => handle.enabled);
+
+  const renderInputHandle = (handle, index) => {
+    const connected = connectedInputs[handle.id];
+    const classes = colorClasses[handle.color];
+    return (
+      <div
+        key={handle.id}
+        className={`group/handle absolute -left-16 z-20 flex h-[52px] w-[52px] items-center justify-center rounded-full transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 ${connected ? "pointer-events-auto opacity-100" : visibilityClasses}`}
+        style={{ top: 170 + index * 86 }}
+      >
+        <Handle
+          type="target"
+          position={Position.Left}
+          id={handle.id}
+          style={{
+            left: 0,
+            top: 26,
+            width: 52,
+            height: 52,
+            opacity: 1,
+            pointerEvents: "auto",
+          }}
+          className={`!rounded-full !border-[3px] transition-all ${connected ? classes.active : classes.idle}`}
+          data-type={handle.color}
+        />
+        <span className="pointer-events-none relative z-10 scale-125 text-current">{handle.icon}</span>
+        <span className={`pointer-events-none absolute -left-24 hidden w-20 text-right text-[10px] font-semibold uppercase tracking-wide ${classes.label} group-hover/handle:block`}>
+          {handle.label}
+        </span>
+      </div>
+    );
+  };
+
+  const renderOutputHandle = () => {
+    const connected = connectedOutputs.textOutput;
+    const classes = colorClasses.blue;
+    return (
+      <div
+        className={`group/handle absolute -right-16 top-8 z-20 flex h-[52px] w-[52px] items-center justify-center rounded-full transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 ${connected ? "pointer-events-auto opacity-100" : visibilityClasses}`}
+      >
+        <Handle
+          type="source"
+          position={Position.Right}
+          id="textOutput"
+          style={{
+            right: 0,
+            top: 26,
+            width: 52,
+            height: 52,
+            opacity: 1,
+            pointerEvents: "auto",
+          }}
+          className={`!rounded-full !border-[3px] transition-all ${connected ? classes.active : classes.idle}`}
+          data-type="blue"
+        />
+        <span className="pointer-events-none relative z-10 text-lg font-black leading-none text-current">T</span>
+        <span className={`pointer-events-none absolute left-16 hidden w-24 text-left text-[10px] font-semibold uppercase tracking-wide ${classes.label} group-hover/handle:block`}>
+          Text
+        </span>
+      </div>
+    );
+  };
+
   return (
-    <div 
-      style={{ minHeight: 280, '--loader-color': '#2563eb' }} 
+    <div
+      style={{ '--loader-color': '#2563eb' }}
       className={`
-        nowheel group flex flex-col flex-1 w-80 
-        rounded-2xl border-2 relative transition-all duration-300 ease-in-out 
-        ${selected 
-          ? "border-blue-600 shadow-[0_0_25px_rgba(37,99,235,0.3)] scale-[1.02] ring-1 ring-blue-500/20" 
-          : "border-zinc-800 hover:border-zinc-700 shadow-lg"} 
-        bg-[#0c0d0f]/95 backdrop-blur-sm
+        nowheel group relative flex w-[620px] flex-col rounded-[32px] border-[3px]
+        bg-[#151515]/95 text-zinc-100 shadow-2xl transition-all duration-300 ease-in-out
+        ${selected
+          ? "border-blue-500 shadow-[0_0_32px_rgba(59,130,246,0.24)] ring-2 ring-blue-500/25"
+          : "border-[#252525] hover:border-zinc-500"}
       `}
     >
       {data.isLoading && (
         <div className="loader-border" />
       )}
-      <div className="flex items-center gap-2 absolute -top-5 left-0">
-        <h3 className="text-zinc-400 text-[10px] font-medium tracking-wider uppercase">
-          Text {id.replace(/^\D+/g, "")}
-        </h3>
-        {generationCost !== null && !selectedModel?.id.includes("passthrough") && (
-          <span className="text-xs text-blue-500 -mt-0.5 font-medium flex items-center gap-1 opacity-80">
+
+      <div className="absolute -top-9 left-6 flex items-center gap-2">
+        <TfiText size={18} className="text-zinc-300" />
+        <h4 className="text-base font-black tracking-tight text-zinc-100">
+          Text #{id.replace(/^\D+/g, "") || "1"}
+        </h4>
+        {generationCost !== null && isGeneratorModel && (
+          <span className="flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-bold text-zinc-300">
             {isRefreshingCost ? (
-              <span className="flex items-center gap-1 italic text-blue-200">
-                <div className="w-2 h-2 border-[1.5px] border-blue-200/30 border-t-blue-400 rounded-full animate-spin"></div>
-              </span>
+              <div className="h-2 w-2 animate-spin rounded-full border-[1.5px] border-white/30 border-t-white" />
             ) : (
-              <span>
-                {generationCost === 0 ? 'Free' : `$${generationCost}`}
-              </span>
+              <span>{generationCost === 0 ? "Free" : `$${generationCost}`}</span>
             )}
           </span>
         )}
       </div>
-      <div className="flex flex-col">
-        <div className="flex items-center justify-between bg-gradient-to-r from-[#151618] to-[#1c1e21] rounded-t-2xl border-b border-zinc-800 py-2 px-3">
-          <div className="flex items-center gap-2.5">
-            <div className={`p-1.5 rounded-lg ${selected ? "bg-blue-600 text-white" : "bg-zinc-800 text-zinc-400"} transition-colors`}>
-              <TfiText size={14} />
-            </div>
-            <h3 className="text-xs font-bold text-zinc-100">
-              {selectedModel.name}
-            </h3>
-          </div>
-          {outputHistory.length > 0 && (
-            <div className="absolute -top-10 right-0 bg-[#0c0d0f]/95 flex items-center gap-1 p-1 border border-white/10 rounded-full ml-auto">
-              <button 
-                type="button"
-                suppressHydrationWarning={true}
-                onClick={handlePrev}
-                disabled={currentHistoryIndex <= 0}
-                className="w-5 h-5 flex items-center justify-center rounded-full hover:bg-white/10 text-zinc-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-all"
-                title="Previous"
-              >
-                <FaAngleLeft size={10} />
-              </button>
-                
-              <div className="flex items-center gap-1.5 px-1">
-                <span className="text-[9px] font-bold text-white/90 tabular-nums tracking-wide">
-                  {currentHistoryIndex + 1}/{outputHistory.length}
-                </span>
-                <div className="w-[1px] h-2.5 bg-white/10" />
-                <button 
-                  type="button"
-                  suppressHydrationWarning={true}
-                  onClick={handleDeleteHistory}
-                  className="p-1 hover:bg-red-500/10 rounded-full text-zinc-400 hover:text-red-500 transition-colors flex items-center justify-center"
-                  title="Delete history"
-                >
-                  <IoTrashOutline size={10} />
-                </button>
-                <div className="w-[1px] h-2.5 bg-white/10" />
-                <NodeSendButton 
-                  id={id} 
-                  data={data} 
-                  outputHistory={outputHistory} 
-                  currentHistoryIndex={currentHistoryIndex} 
-                  currentOutputIndex={currentOutputIndex}
-                />
-              </div>
-              <button 
-                type="button"
-                suppressHydrationWarning={true}
-                onClick={handleNext}
-                disabled={currentHistoryIndex >= outputHistory.length - 1}
-                className="w-5 h-5 flex items-center justify-center rounded-full hover:bg-white/10 text-zinc-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-all"
-                title="Next"
-              >
-                <FaAngleRight size={10} />
-              </button>
-            </div>
-          )}
-          <NodeOptionsMenu 
-            nodeId={id}
-            onDuplicate={data.duplicateNode}
-            onDelete={handleDeleteNode}
+
+      {inputHandleItems.map(renderInputHandle)}
+      {renderOutputHandle()}
+
+      {outputHistory.length > 0 && (
+        <div className="absolute -top-12 right-2 z-30 flex items-center gap-1 rounded-full border border-white/10 bg-[#101010]/95 p-1 shadow-xl">
+          <button
+            type="button"
+            suppressHydrationWarning={true}
+            onClick={handlePrev}
+            disabled={currentHistoryIndex <= 0}
+            className="flex h-6 w-6 items-center justify-center rounded-full text-white/70 transition hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
+            title="Previous"
+          >
+            <FaAngleLeft size={11} />
+          </button>
+          <span className="px-1 text-[10px] font-bold tabular-nums text-white/80">
+            {currentHistoryIndex + 1}/{outputHistory.length}
+          </span>
+          <button
+            type="button"
+            suppressHydrationWarning={true}
+            onClick={handleDeleteHistory}
+            className="flex h-6 w-6 items-center justify-center rounded-full text-zinc-400 transition hover:bg-red-500/10 hover:text-red-400"
+            title="Delete history"
+          >
+            <IoTrashOutline size={12} />
+          </button>
+          <NodeSendButton
+            id={id}
+            data={data}
+            outputHistory={outputHistory}
+            currentHistoryIndex={currentHistoryIndex}
+            currentOutputIndex={currentOutputIndex}
           />
+          <button
+            type="button"
+            suppressHydrationWarning={true}
+            onClick={handleNext}
+            disabled={currentHistoryIndex >= outputHistory.length - 1}
+            className="flex h-6 w-6 items-center justify-center rounded-full text-white/70 transition hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
+            title="Next"
+          >
+            <FaAngleRight size={11} />
+          </button>
         </div>
+      )}
+
+      <div className={`absolute right-5 top-5 z-30 transition-opacity duration-200 group-hover:opacity-100 group-focus-within:opacity-100 ${selected ? "opacity-100" : "opacity-0"}`}>
+        <NodeOptionsMenu
+          nodeId={id}
+          onDuplicate={data.duplicateNode}
+          onDelete={handleDeleteNode}
+        />
       </div>
+
       {data.selectedModel?.id === "text-passthrough" ? (
-        <div className="w-full h-full flex-1 flex flex-col">
+        <div className="min-h-[360px] w-full flex-1 overflow-hidden rounded-[29px]">
           <UploadNode id={id} data={data} formValues={formValues} setFormValues={setFormValues} selectedModel={selectedModel} loading={loading} uploadType="text" acceptType="text" />
         </div>
       ) : (
-        <div className="flex items-center justify-center flex-1 w-full h-full bg-black/20">
+        <div className="relative flex min-h-[360px] w-full flex-grow overflow-hidden rounded-[29px] transition-all duration-500">
           {data.isLoading ? (
-            <div className="flex flex-col gap-2.5 w-full h-full overflow-hidden animate-pulse">
-              <div className="h-2.5 bg-white/5 rounded-full w-full"></div>
-              <div className="h-2.5 bg-white/5 rounded-full w-[90%]"></div>
-              <div className="h-2.5 bg-white/5 rounded-full w-[75%]"></div>
-              <div className="my-1"/>
-              <div className="h-2.5 bg-white/5 rounded-full w-full"></div>
-              <div className="h-2.5 bg-white/5 rounded-full w-[85%]"></div>
-              <div className="h-2.5 bg-white/5 rounded-full w-[60%]"></div>
+            <div className="flex h-full min-h-[360px] w-full animate-pulse items-center justify-center overflow-hidden bg-white/5">
+              <div className="flex flex-col items-center gap-3">
+                <div className="h-9 w-9 animate-spin rounded-full border-2 border-blue-400 border-t-transparent" />
+                <span className="text-[10px] font-bold uppercase tracking-wider text-blue-300">Generating...</span>
+              </div>
             </div>
           ) : data.errorMsg ? (
-            <div className="text-red-400 text-xs font-medium p-3 bg-red-500/10 rounded-xl border border-red-500/20 w-full">
+            <div className="m-8 w-full self-start rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-xs font-medium text-red-300">
               {data.errorMsg || "Generation failed"}
             </div>
           ) : currentOutput && !data.isLoading ? ( 
-            <div className="relative flex flex-col gap-2 bg-zinc-900/30 rounded-xl border border-zinc-800/50 w-full h-full p-2">
+            <div className="relative flex h-full min-h-[360px] w-full flex-col gap-2 p-8">
               <textarea
                 ref={textareaRef}
                 readOnly
                 value={currentOutput || ""}
                 placeholder="Output will appear here..."
-                className="w-full h-full max-h-96 text-xs leading-relaxed outline-none bg-transparent resize-none text-zinc-100 overflow-hidden font-medium placeholder:italic placeholder:opacity-50"
+                className="nodrag nowheel h-full min-h-[280px] w-full resize-none bg-transparent text-xl font-medium leading-relaxed text-zinc-100 outline-none placeholder:text-zinc-500"
               />
               {currentOutputList.length > 1 && (
-                <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/60 backdrop-blur-sm px-2 py-0.5 rounded-full border border-white/10 opacity-0 group-hover/text:opacity-100 transition-opacity">
+                <div className="absolute bottom-5 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full border border-white/10 bg-black/60 px-2 py-0.5 opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100">
                   <button
                     type="button"
                     suppressHydrationWarning={true}
@@ -556,7 +639,7 @@ const TextGeneration = ({ id, data, selected }) => {
                       e.stopPropagation();
                       setCurrentOutputIndex((prev) => (prev > 0 ? prev - 1 : currentOutputList.length - 1));
                     }}
-                    className="text-white hover:text-blue-400 p-0.5"
+                    className="p-0.5 text-white hover:text-blue-400"
                   >
                     <FaAngleLeft size={12} />
                   </button>
@@ -570,7 +653,7 @@ const TextGeneration = ({ id, data, selected }) => {
                       e.stopPropagation();
                       setCurrentOutputIndex((prev) => (prev < currentOutputList.length - 1 ? prev + 1 : 0));
                     }}
-                    className="text-white hover:text-blue-400 p-0.5"
+                    className="p-0.5 text-white hover:text-blue-400"
                   >
                     <FaAngleRight size={12} />
                   </button>
@@ -578,173 +661,51 @@ const TextGeneration = ({ id, data, selected }) => {
               )}
             </div>
           ) : (
-            <div className="flex flex-col items-center justify-center text-zinc-400 gap-2">
-              <TfiText size={32} />
-              <span className="text-[10px] italic">Result appeared here...</span>
-            </div>
+            <>
+              {hasPrompt && (
+                <textarea
+                  value={promptValue}
+                  onChange={(event) => handleChange("prompt", event.target.value)}
+                  onPointerDown={stopNodeDrag}
+                  placeholder='Try "Happy dog with sunglasses and floating ring"'
+                  className="nodrag nowheel h-full min-h-[280px] w-full resize-none bg-transparent p-8 text-xl font-medium leading-relaxed text-zinc-200 outline-none placeholder:text-zinc-500"
+                />
+              )}
+              {!hasPrompt && (
+                <div className="flex h-full min-h-[360px] w-full items-center justify-center text-zinc-700">
+                  <TfiText size={72} />
+                </div>
+              )}
+            </>
           )}
+
+          <div className={`absolute bottom-7 left-8 z-20 flex items-center gap-3 transition-opacity duration-200 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 ${visibilityClasses}`}>
+            <button
+              type="button"
+              onPointerDown={stopNodeDrag}
+              onClick={openPropertiesPanel}
+              className="nodrag nowheel flex h-11 w-11 items-center justify-center rounded-full bg-[#242424]/95 text-zinc-300 transition hover:bg-[#303030] hover:text-white"
+              title="Settings"
+            >
+              <IoSettingsOutline size={21} />
+            </button>
+          </div>
+
+          <button
+            type="button"
+            suppressHydrationWarning={true}
+            onPointerDown={stopNodeDrag}
+            onClick={handleRunSingleNode}
+            disabled={data.isLoading || loading}
+            className={`nodrag nowheel absolute bottom-7 right-8 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-zinc-300 text-zinc-900 transition hover:bg-white group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 disabled:cursor-not-allowed ${
+              selected ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
+            }`}
+            title="Run text node"
+          >
+            <IoPlay size={28} className="translate-x-0.5" />
+          </button>
         </div>
       )}
-      <Handle  
-        type="target" 
-        position={Position.Left} 
-        id="textInput" 
-        style={{ 
-          top: 100,
-          width: 14,
-          height: 14,
-          opacity: hasPrompt ? 1 : 0,
-          pointerEvents: hasPrompt ? 'auto' : 'none',
-          transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-        }}  
-        className={`
-          !rounded-full !border-[3px] !left-[-8px] transition-all
-          ${connectedInputs.textInput 
-            ? '!bg-blue-500 !border-zinc-900 shadow-[0_0_15px_rgba(59,130,246,0.8)]' 
-            : '!bg-zinc-900 !border-blue-500/50 hover:!border-blue-500 shadow-sm'
-          }
-        `}
-        data-type="blue"
-      />
-      {hasPrompt && (
-        <p 
-          className={`absolute -left-9 top-[100px] text-[10px] font-bold tracking-tight text-blue-500 transition-all duration-300 ${
-            data.activeHandleColor === "blue" 
-              ? "opacity-100 translate-x-0" 
-              : "opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0"
-          }`}
-        > 
-          TEXT 
-        </p>
-      )}
-      
-      <Handle  
-        type="target" 
-        position={Position.Left} 
-        id="textInput2" 
-        style={{ 
-          top: 150,
-          width: 14,
-          height: 14,
-          opacity: hasImageUrl ? 1 : 0,
-          pointerEvents: hasImageUrl ? 'auto' : 'none',
-          transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-        }} 
-        className={`
-          !rounded-full !border-[3px] !left-[-8px] transition-all
-          ${connectedInputs.textInput2 
-            ? '!bg-emerald-500 !border-zinc-900 shadow-[0_0_15px_rgba(16,185,129,0.8)]' 
-            : '!bg-zinc-900 !border-emerald-500/50 hover:!border-emerald-500 shadow-sm'
-          }
-        `}
-        data-type="green"
-      />
-      {hasImageUrl && (
-        <p 
-          className={`absolute -left-11 top-[150px] text-[10px] font-bold tracking-tight text-emerald-500 transition-all duration-300 ${
-            data.activeHandleColor === "green" 
-              ? "opacity-100 translate-x-0" 
-              : "opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0"
-          }`}
-        > 
-          IMAGE 
-        </p>
-      )}
-
-      <Handle  
-        type="target" 
-        position={Position.Left} 
-        id="textInput3" 
-        style={{ 
-          top: 200,
-          width: 14,
-          height: 14,
-          opacity: hasImagesList ? 1 : 0,
-          pointerEvents: hasImagesList ? 'auto' : 'none',
-          transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-        }} 
-        className={`
-          !rounded-full !border-[3px] !left-[-8px] transition-all
-          ${connectedInputs.textInput3 
-            ? '!bg-emerald-500 !border-zinc-900 shadow-[0_0_15px_rgba(16,185,129,0.8)]' 
-            : '!bg-zinc-900 !border-emerald-500/50 hover:!border-emerald-500 shadow-sm'
-          }
-        `}
-        data-type="green"
-      />
-      {hasImagesList && (
-        <p 
-          className={`absolute -left-11 top-[200px] text-[10px] font-bold tracking-tight text-emerald-500 transition-all duration-300 ${
-            data.activeHandleColor === "green" 
-              ? "opacity-100 translate-x-0" 
-              : "opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0"
-          }`}
-        > 
-          IMAGE 
-        </p>
-      )}
-
-      <Handle  
-        type="target" 
-        position={Position.Left} 
-        id="textInput4" 
-        style={{ 
-          top: 250,
-          width: 14,
-          height: 14,
-          opacity: hasSystemPrompt ? 1 : 0,
-          pointerEvents: hasSystemPrompt ? 'auto' : 'none',
-          transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-        }} 
-        className={`
-          !rounded-full !border-[3px] !left-[-8px] transition-all
-          ${connectedInputs.textInput4 
-            ? '!bg-blue-600 !border-zinc-900 shadow-[0_0_15px_rgba(37,99,235,0.8)]' 
-            : '!bg-zinc-900 !border-blue-600/50 hover:!border-blue-600 shadow-sm'
-          }
-        `}
-        data-type="blue"
-      />
-      {hasSystemPrompt && (
-        <p 
-          className={`absolute -left-14 top-[250px] text-[10px] font-bold tracking-tight text-blue-600 transition-all duration-300 ${
-            data.activeHandleColor === "blue" 
-              ? "opacity-100 translate-x-0" 
-              : "opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0"
-          }`}
-        > 
-          SYSTEM 
-        </p>
-      )}
-
-      <Handle 
-        type="source" 
-        position={Position.Right} 
-        id="textOutput" 
-        style={{ 
-          top: 100,
-          width: 14,
-          height: 14,
-          transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-        }} 
-        className={`
-          !rounded-full !border-[3px] !right-[-8px] transition-all
-          ${connectedOutputs.textOutput 
-            ? '!bg-blue-500 !border-zinc-900 shadow-[0_0_15px_rgba(59,130,246,0.8)]' 
-            : '!bg-zinc-900 !border-blue-500/50 hover:!border-blue-500 shadow-sm'
-          }
-        `}
-        data-type="blue"
-      />
-      <p 
-        className={`absolute -right-9 top-[100px] text-[10px] font-bold tracking-tight text-blue-500 transition-all duration-300 ${
-          data.activeHandleColor === "blue" 
-            ? "opacity-100 translate-x-0" 
-            : "opacity-0 translate-x-1 group-hover:opacity-100 group-hover:translate-x-0"
-        }`}
-      > 
-        TEXT 
-      </p>
     </div>
   );
 };

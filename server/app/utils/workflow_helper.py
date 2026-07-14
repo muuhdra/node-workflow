@@ -1,86 +1,149 @@
-import os
 import json
-import uuid
-import httpx
 import logging
+import uuid
 from datetime import datetime, timezone
-from fastapi import HTTPException
-from typing import Optional
-from sqlalchemy import select, delete
-
 from pathlib import Path
+
+from fastapi import HTTPException
+from sqlalchemy import delete, select
+
 from app.database import AsyncSessionLocal
 from app.models import Workflow
+from app.services.aiml_client import (
+    delete_node_run,
+    get_run_status,
+    submit_node,
+)
+from app.services.aiml_models import calculate_generation_cost, get_node_schemas
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-MU_API_KEY = os.getenv("MU_API_KEY")
+LIST_TARGET_HANDLES = {
+    "concatInput",
+    "textInput3",
+    "imageInput2",
+    "videoInput6",
+    "videoInput7",
+    "videoInput8",
+    "apiInput2",
+}
 
 
-# ---------------------------------------------------------------------------
-# Helper: API key (required only for AI execution calls)
-# ---------------------------------------------------------------------------
-
-async def get_api_key():
-    api_key = os.getenv("MU_API_KEY")
-    if not api_key:
-        raise HTTPException(
-            status_code=400,
-            detail="MU_API_KEY is not set. Add it to your .env file to enable AI generation."
-        )
-    return api_key
+def _invalid_workflow(detail: str):
+    raise HTTPException(status_code=422, detail=detail)
 
 
-# ---------------------------------------------------------------------------
-# Helper: proxy to muapi.ai (for AI execution endpoints only)
-# ---------------------------------------------------------------------------
+def _is_list_target(node: dict, target_handle: str) -> bool:
+    if target_handle in LIST_TARGET_HANDLES:
+        return True
+    if node.get("category") != "api":
+        return False
+    return isinstance(node.get("input_params", {}).get(target_handle), list)
 
-async def proxy_request_helper(method: str, url: str, payload: Optional[dict] = None):
-    api_key = await get_api_key()
-    headers = {
-        "Content-Type": "application/json",
-        "x-api-key": api_key,
-    }
 
-    async with httpx.AsyncClient() as client:
-        try:
-            if method.upper() == "GET":
-                response = await client.get(url, headers=headers, timeout=60.0)
-            elif method.upper() == "POST":
-                response = await client.post(url, json=payload, headers=headers, timeout=60.0)
-            elif method.upper() == "DELETE":
-                response = await client.delete(url, headers=headers, timeout=60.0)
-            else:
-                raise HTTPException(status_code=405, detail=f"Method {method} not supported in proxy")
+def _validate_workflow_graph(payload: dict):
+    """Reject malformed workflow graphs before they reach persistence."""
+    if not isinstance(payload, dict):
+        _invalid_workflow("Workflow payload must be an object")
 
-        except httpx.RequestError as e:
-            logger.error(f"HTTPx Request Error for {method} {url}: {e}")
-            raise HTTPException(status_code=500, detail=f"Error contacting remote server: {str(e)}")
-        except Exception as e:
-            logger.error(f"Unexpected error in proxy_request_helper for {method} {url}: {e}")
-            raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+    data = payload.get("data")
+    edges = payload.get("edges")
+    if not isinstance(data, dict) or not isinstance(data.get("nodes"), list):
+        _invalid_workflow("Workflow data.nodes must be a list")
+    if not isinstance(edges, list):
+        _invalid_workflow("Workflow edges must be a list")
 
-    try:
-        if response.content:
-            resp_json = response.json()
-        else:
-            resp_json = {}
-    except ValueError:
-        resp_json = {"detail": response.text or "Unknown error from remote server"}
+    node_by_id = {}
+    for index, node in enumerate(data["nodes"]):
+        if not isinstance(node, dict):
+            _invalid_workflow(f"Node at index {index} must be an object")
+        node_id = node.get("id")
+        if not isinstance(node_id, str) or not node_id.strip():
+            _invalid_workflow(f"Node at index {index} has an invalid id")
+        if not isinstance(node.get("input_params", {}), dict):
+            _invalid_workflow(f"Node {node_id} input_params must be an object")
+        if node_id in node_by_id:
+            _invalid_workflow(f"Duplicate node id: {node_id}")
+        node_by_id = {**node_by_id, node_id: node}
 
-    if response.status_code == 200:
-        return resp_json
-    else:
-        error_detail = resp_json.get("detail", "Something went wrong")
-        logger.warning(f"Remote server returned {response.status_code}: {error_detail}")
-        raise HTTPException(status_code=response.status_code, detail=error_detail)
+    edge_ids = set()
+    connection_keys = set()
+    scalar_targets = set()
+    adjacency = {node_id: [] for node_id in node_by_id}
+    indegrees = {node_id: 0 for node_id in node_by_id}
+
+    required_fields = ("id", "source", "target", "sourceHandle", "targetHandle")
+    for index, edge in enumerate(edges):
+        if not isinstance(edge, dict):
+            _invalid_workflow(f"Edge at index {index} must be an object")
+        for field in required_fields:
+            value = edge.get(field)
+            if not isinstance(value, str) or not value.strip():
+                _invalid_workflow(f"Edge at index {index} has an invalid {field}")
+
+        edge_id = edge["id"]
+        source = edge["source"]
+        target = edge["target"]
+        source_handle = edge["sourceHandle"]
+        target_handle = edge["targetHandle"]
+
+        if edge_id in edge_ids:
+            _invalid_workflow(f"Duplicate edge id: {edge_id}")
+        edge_ids = {*edge_ids, edge_id}
+
+        if source not in node_by_id:
+            _invalid_workflow(
+                f"Edge {edge_id} references an unknown source node: {source}"
+            )
+        if target not in node_by_id:
+            _invalid_workflow(
+                f"Edge {edge_id} references an unknown target node: {target}"
+            )
+
+        connection_key = (source, source_handle, target, target_handle)
+        if connection_key in connection_keys:
+            _invalid_workflow(f"Duplicate connection on edge: {edge_id}")
+        connection_keys = {*connection_keys, connection_key}
+
+        scalar_target = (target, target_handle)
+        if not _is_list_target(node_by_id[target], target_handle):
+            if scalar_target in scalar_targets:
+                _invalid_workflow(
+                    "Multiple sources connected to scalar input: "
+                    f"{target}.{target_handle}"
+                )
+            scalar_targets = {*scalar_targets, scalar_target}
+
+        adjacency = {
+            **adjacency,
+            source: [*adjacency[source], target],
+        }
+        indegrees = {
+            **indegrees,
+            target: indegrees[target] + 1,
+        }
+
+    queue = [node_id for node_id, degree in indegrees.items() if degree == 0]
+    visited_count = 0
+    while queue:
+        current, *queue = queue
+        visited_count += 1
+        for neighbor in adjacency[current]:
+            next_degree = indegrees[neighbor] - 1
+            indegrees = {**indegrees, neighbor: next_degree}
+            if next_degree == 0:
+                queue = [*queue, neighbor]
+
+    if visited_count != len(node_by_id):
+        _invalid_workflow("Workflow graph contains a cycle")
 
 
 # ---------------------------------------------------------------------------
 # Helper: serialize a Workflow ORM object to dict
 # ---------------------------------------------------------------------------
+
 
 def _workflow_to_dict(w: Workflow) -> dict:
     return {
@@ -92,9 +155,6 @@ def _workflow_to_dict(w: Workflow) -> dict:
         "run_history": {},
         "run_id": None,
         "is_owner": True,
-        "is_published": False,
-        "is_template": False,
-        "show_temp_button": False,
         "category": w.category,
         "thumbnail": w.thumbnail,
         "created_at": w.created_at.isoformat() if w.created_at else None,
@@ -106,6 +166,7 @@ def _workflow_to_dict(w: Workflow) -> dict:
 # LOCAL CRUD — No API key required
 # ---------------------------------------------------------------------------
 
+
 async def create_or_update_workflow(payload: dict):
     """Create a new workflow or update an existing one — stored locally in SQLite."""
     workflow_id = payload.get("workflow_id")
@@ -113,10 +174,23 @@ async def create_or_update_workflow(payload: dict):
     async with AsyncSessionLocal() as session:
         if workflow_id:
             # Update existing workflow
-            result = await session.execute(select(Workflow).where(Workflow.id == workflow_id))
+            result = await session.execute(
+                select(Workflow).where(Workflow.id == workflow_id)
+            )
             workflow = result.scalar_one_or_none()
             if not workflow:
                 raise HTTPException(status_code=404, detail="Workflow not found")
+
+            candidate_payload = {
+                "edges": payload.get(
+                    "edges", json.loads(workflow.edges) if workflow.edges else []
+                ),
+                "data": payload.get(
+                    "data",
+                    json.loads(workflow.data) if workflow.data else {"nodes": []},
+                ),
+            }
+            _validate_workflow_graph(candidate_payload)
 
             if "name" in payload:
                 workflow.name = payload["name"]
@@ -127,6 +201,11 @@ async def create_or_update_workflow(payload: dict):
             workflow.updated_at = datetime.now(timezone.utc)
         else:
             # Create new workflow
+            candidate_payload = {
+                "edges": payload.get("edges", []),
+                "data": payload.get("data", {"nodes": []}),
+            }
+            _validate_workflow_graph(candidate_payload)
             workflow = Workflow(
                 id=str(uuid.uuid4()),
                 name=payload.get("name", "Untitled Workflow"),
@@ -143,7 +222,9 @@ async def create_or_update_workflow(payload: dict):
 async def get_workflow_defs_helper():
     """List all workflows from local SQLite."""
     async with AsyncSessionLocal() as session:
-        result = await session.execute(select(Workflow).order_by(Workflow.updated_at.desc()))
+        result = await session.execute(
+            select(Workflow).order_by(Workflow.updated_at.desc())
+        )
         workflows = result.scalars().all()
         return [_workflow_to_dict(w) for w in workflows]
 
@@ -151,7 +232,9 @@ async def get_workflow_defs_helper():
 async def get_workflow_def_helper(workflow_id: str):
     """Get a single workflow by ID from local SQLite."""
     async with AsyncSessionLocal() as session:
-        result = await session.execute(select(Workflow).where(Workflow.id == workflow_id))
+        result = await session.execute(
+            select(Workflow).where(Workflow.id == workflow_id)
+        )
         workflow = result.scalar_one_or_none()
         if not workflow:
             raise HTTPException(status_code=404, detail="Workflow not found")
@@ -161,7 +244,9 @@ async def get_workflow_def_helper(workflow_id: str):
 async def delete_workflow_def_by_id(workflow_id: str):
     """Delete a workflow from local SQLite."""
     async with AsyncSessionLocal() as session:
-        result = await session.execute(select(Workflow).where(Workflow.id == workflow_id))
+        result = await session.execute(
+            select(Workflow).where(Workflow.id == workflow_id)
+        )
         workflow = result.scalar_one_or_none()
         if not workflow:
             raise HTTPException(status_code=404, detail="Workflow not found")
@@ -173,7 +258,9 @@ async def delete_workflow_def_by_id(workflow_id: str):
 async def update_workflow_name_helper(workflow_id: str, payload: dict):
     """Rename a workflow in local SQLite."""
     async with AsyncSessionLocal() as session:
-        result = await session.execute(select(Workflow).where(Workflow.id == workflow_id))
+        result = await session.execute(
+            select(Workflow).where(Workflow.id == workflow_id)
+        )
         workflow = result.scalar_one_or_none()
         if not workflow:
             raise HTTPException(status_code=404, detail="Workflow not found")
@@ -186,7 +273,9 @@ async def update_workflow_name_helper(workflow_id: str, payload: dict):
 async def update_workflow_category_helper(workflow_id: str, payload: dict):
     """Update workflow category in local SQLite."""
     async with AsyncSessionLocal() as session:
-        result = await session.execute(select(Workflow).where(Workflow.id == workflow_id))
+        result = await session.execute(
+            select(Workflow).where(Workflow.id == workflow_id)
+        )
         workflow = result.scalar_one_or_none()
         if not workflow:
             raise HTTPException(status_code=404, detail="Workflow not found")
@@ -199,7 +288,9 @@ async def update_workflow_category_helper(workflow_id: str, payload: dict):
 async def generate_thumbnail_helper(workflow_id: str, payload: dict):
     """Store a thumbnail URL for a workflow in local SQLite."""
     async with AsyncSessionLocal() as session:
-        result = await session.execute(select(Workflow).where(Workflow.id == workflow_id))
+        result = await session.execute(
+            select(Workflow).where(Workflow.id == workflow_id)
+        )
         workflow = result.scalar_one_or_none()
         if not workflow:
             raise HTTPException(status_code=404, detail="Workflow not found")
@@ -215,86 +306,47 @@ async def get_workflow_last_run(workflow_id: str):
 
 
 # ---------------------------------------------------------------------------
-# REMOTE AI EXECUTION — API key required
+# AI/ML API EXECUTION
 # ---------------------------------------------------------------------------
 
+
 async def get_node_schemas_helper(workflow_id: str):
-    url = f"https://api.muapi.ai/workflow/{workflow_id}/node-schemas"
-    return await proxy_request_helper("GET", url)
+    return get_node_schemas()
 
 
 async def get_api_node_schemas_helper(workflow_id: str):
-    url = f"https://api.muapi.ai/workflow/{workflow_id}/api-node-schemas"
-    return await proxy_request_helper("GET", url)
+    return {"categories": {"api": {"models": {}}}}
 
 
 async def run_workflow_helper(workflow_id: str, payload: dict):
-    url = f"https://api.muapi.ai/workflow/{workflow_id}/run"
-    return await proxy_request_helper("POST", url, payload)
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "Run All is temporarily unavailable while workflow orchestration is "
+            "being migrated to AI/ML API. Run image and video nodes individually."
+        ),
+    )
 
 
 async def get_run_status_helper(run_id: str):
-    url = f"https://api.muapi.ai/workflow/run/{run_id}/status"
-    return await proxy_request_helper("GET", url)
+    return await get_run_status(run_id)
 
 
 async def run_node_helper(workflow_id: str, node_id: str, payload: dict):
-    url = f"https://api.muapi.ai/workflow/{workflow_id}/node/{node_id}/run"
-    return await proxy_request_helper("POST", url, payload)
-
-
-async def publish_workflow_helper(workflow_id: str, payload: dict):
-    url = f"https://api.muapi.ai/workflow/workflow/{workflow_id}/publish"
-    return await proxy_request_helper("POST", url, payload)
-
-
-async def template_workflow_helper(workflow_id: str, payload: dict):
-    url = f"https://api.muapi.ai/workflow/workflow/{workflow_id}/template"
-    return await proxy_request_helper("POST", url, payload)
-
-
-async def cloudfront_signed_url_helper(payload: dict):
-    url = "https://api.muapi.ai/workflow/cloudfront-signed-url"
-    return await proxy_request_helper("POST", url, payload)
-
-
-async def get_file_upload_url_helper(params: dict):
-    import urllib.parse
-    query_string = urllib.parse.urlencode(params)
-    url = f"https://api.muapi.ai/app/get_file_upload_url?{query_string}"
-    return await proxy_request_helper("GET", url)
+    return await submit_node(
+        node_id,
+        payload.get("model", ""),
+        payload.get("params", {}),
+        payload.get("run_id"),
+    )
 
 
 async def calculate_dynamic_cost_helper(payload: dict):
-    url = "https://api.muapi.ai/app/calculate_dynamic_cost"
-    return await proxy_request_helper("POST", url, payload)
-
-
-async def architect_workflow_helper(payload: dict):
-    url = "https://api.muapi.ai/workflow/architect"
-    return await proxy_request_helper("POST", url, payload)
-
-
-async def poll_architect_result_helper(id: str):
-    url = f"https://api.muapi.ai/workflow/poll-architect/{id}/result"
-    return await proxy_request_helper("GET", url)
+    cost = calculate_generation_cost(
+        payload.get("task_name", ""), payload.get("payload", {})
+    )
+    return {"cost": cost}
 
 
 async def delete_node_run_by_id_helper(node_run_id: str):
-    url = f"https://api.muapi.ai/workflow/node-run/{node_run_id}"
-    return await proxy_request_helper("DELETE", url)
-
-
-async def get_workflow_api_inputs_helper(workflow_id: str):
-    url = f"https://api.muapi.ai/workflow/{workflow_id}/api-inputs"
-    return await proxy_request_helper("GET", url)
-
-
-async def execute_workflow_via_api_helper(workflow_id: str, payload: dict):
-    url = f"https://api.muapi.ai/workflow/{workflow_id}/api-execute"
-    return await proxy_request_helper("POST", url, payload)
-
-
-async def get_workflow_api_outputs_helper(run_id: str):
-    url = f"https://api.muapi.ai/workflow/run/{run_id}/api-outputs"
-    return await proxy_request_helper("GET", url)
+    return delete_node_run(node_run_id)

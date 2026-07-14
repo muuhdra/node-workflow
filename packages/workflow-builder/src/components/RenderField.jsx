@@ -1,4 +1,4 @@
-import axios from "axios";
+import { uploadFile } from "./uploadFile";
 import Image from "next/image";
 import React, { useLayoutEffect, useRef, useState } from "react";
 import { FaAngleDown } from "react-icons/fa6";
@@ -62,26 +62,12 @@ const RenderField = ({ fieldName, meta, idx, formValues, setFormValues, handleCh
     };
 
     setUploading(true);
-    axios.get("/api/app/get_file_upload_url", {
-      params: { filename: file.name }
-    })
-    .then((response) => {
-      const { url, fields } = response.data;
-
-      const formData = new FormData();
-      Object.entries(fields).forEach(([key, value]) => {
-        formData.append(key, value);
-      });
-      formData.append("file", file);
-      axios.post(url, formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-        onUploadProgress: (progressEvent) => {
+    uploadFile(file, (progressEvent) => {
+          if (!progressEvent.total) return;
           const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
           setUploadProgress(percentCompleted);
-        }
-      })
-      .then(() => {
-        const uploadedUrl = `https://cdn.muapi.ai/${fields.key}`;
+    })
+      .then((uploadedUrl) => {
         setFormValues((prev) => { 
           const current = prev[field];
           const updatedValue = fieldSchema.type === 'array'
@@ -95,10 +81,14 @@ const RenderField = ({ fieldName, meta, idx, formValues, setFormValues, handleCh
           setUploadProgress(0);
         }, 500);
       })
-    })
     .catch((error) => {
-      console.error("Upload failed", error);
-      toast.error("Upload failed.", error?.response?.data);
+      const status = error?.response?.status;
+      const detail = error?.response?.data?.detail || error?.response?.data || error?.message;
+      console.error("Field upload failed", {
+        status,
+        detail,
+      });
+      toast.error(`Upload failed${status ? ` (${status})` : ""}`);
       setUploading(false);
       setUploadProgress(0);
     })

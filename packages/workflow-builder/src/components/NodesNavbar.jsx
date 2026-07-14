@@ -65,16 +65,11 @@ const NodesNavbar = ({ addNode, apiNodeModels, filterNodeTypes = null, nodeSchem
       modelsMap ? Object.entries(modelsMap).map(([id, model]) => ({
         ...model,
         id,
-        name: SPECIAL_MODEL_NAMES[id] || formatName(id)
+        name: SPECIAL_MODEL_NAMES[id] || model.name || formatName(id)
       })) : [];
 
     const withLocalFallback = (backendModels, localModels) => {
-      if (backendModels.length === 0) return localModels;
-
-      return localModels.reduce((models, localModel) => {
-        if (models.some((model) => model.id === localModel.id)) return models;
-        return [...models, localModel];
-      }, backendModels);
+      return backendModels.length > 0 ? backendModels : localModels;
     };
 
     const imageModelOptions = withLocalFallback(mapModels(categories.image?.models), imageModels);
@@ -128,6 +123,7 @@ const NodesNavbar = ({ addNode, apiNodeModels, filterNodeTypes = null, nodeSchem
   const categorizedModels = getCategorizedModels();
 
   const handleAddNode = (type, model) => {
+    if (model?.available === false) return;
     addNode(type, null, { selectedModel: model });
     setActiveSubMenu(null);
     setSearchQuery("");
@@ -478,13 +474,22 @@ const Submenu = ({ activeSubMenu, menuStructure, getSubmenuItems, handleAddNode,
               type="button"
               suppressHydrationWarning={true}
               key={idx}
-              className="flex items-center gap-2 px-2 py-2 text-xs text-gray-300 hover:bg-[#2c3037] hover:text-white rounded-lg cursor-pointer transition text-left"
+              disabled={item.model?.available === false}
+              title={item.model?.unavailable_reason || item.label}
+              className={`flex items-center gap-2 px-2 py-2 text-xs rounded-lg transition text-left ${
+                item.model?.available === false
+                  ? "cursor-not-allowed text-gray-600"
+                  : "cursor-pointer text-gray-300 hover:bg-[#2c3037] hover:text-white"
+              }`}
               onClick={() => handleAddNode(item.type, item.model)}
             >
               <span className="text-gray-400 group-hover:text-white text-sm">
                 {getLabelIcon(menuStructure.flatMap(s => s.items).find(i => i.id === activeSubMenu)?.label)}
               </span>
               <span className="truncate">{item.label}</span>
+              {item.model?.available === false && (
+                <span className="ml-auto text-[9px] uppercase text-amber-500">Soon</span>
+              )}
             </button>
           ))
         ) : (

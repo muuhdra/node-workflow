@@ -17,11 +17,11 @@ export default function Home() {
           <span>Workflow<span className="text-blue-500">Pro</span></span>
         </div>
         <Link 
-          href="https://muapi.ai/access-keys"
+          href="https://aimlapi.com"
           target="_blank"
           className="bg-white/5 hover:bg-white/10 backdrop-blur-md border border-white/10 px-5 py-2 rounded-full text-sm font-medium transition-all"
         >
-          Get Api Key
+          AI/ML API
         </Link>
       </nav>
       <main className="relative z-10 flex flex-col items-center justify-center text-center px-4 pt-32 pb-20 max-w-4xl mx-auto">

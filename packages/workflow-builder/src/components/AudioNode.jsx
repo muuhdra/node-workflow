@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Handle, Position, useReactFlow, useStore, useUpdateNodeInternals } from "reactflow";
 import { getRunId, getWorkflowId } from "./WorkflowStore";
 import { toast } from "react-hot-toast";
-import { IoClose, IoTrashOutline } from "react-icons/io5";
+import { IoImageOutline, IoTrashOutline, IoVideocamOutline } from "react-icons/io5";
 import { AiOutlineAudio } from "react-icons/ai";
 import UploadNode from "./UploadNode";
 import { audioModels, downloadFile } from "./utility";
@@ -413,16 +413,82 @@ const AudioGeneration = ({ id, data, selected }) => {
     ? currentOutputList[currentAudioIndex]?.value || currentOutputList[0]?.value || data.resultUrl
     : data.resultUrl;
 
+  const visibilityClasses = selected
+    ? "pointer-events-auto opacity-100"
+    : "pointer-events-none opacity-0";
+
+  const colorClasses = {
+    yellow: {
+      active: "!bg-yellow-500 !border-yellow-300 text-white shadow-[0_0_18px_rgba(234,179,8,0.75)]",
+      idle: "!bg-[#252525] !border-[#252525] text-zinc-300 hover:!border-yellow-400",
+      label: "text-yellow-400",
+    },
+    blue: {
+      active: "!bg-blue-500 !border-blue-300 text-white shadow-[0_0_18px_rgba(59,130,246,0.75)]",
+      idle: "!bg-[#252525] !border-[#252525] text-zinc-300 hover:!border-blue-400",
+      label: "text-blue-400",
+    },
+    green: {
+      active: "!bg-emerald-500 !border-emerald-300 text-white shadow-[0_0_18px_rgba(16,185,129,0.75)]",
+      idle: "!bg-[#252525] !border-[#252525] text-zinc-300 hover:!border-emerald-400",
+      label: "text-emerald-400",
+    },
+    orange: {
+      active: "!bg-orange-500 !border-orange-300 text-white shadow-[0_0_18px_rgba(249,115,22,0.75)]",
+      idle: "!bg-[#252525] !border-[#252525] text-zinc-300 hover:!border-orange-400",
+      label: "text-orange-400",
+    },
+  };
+
+  const inputHandleItems = [
+    { id: "audioInput", label: "Audio", icon: <AiOutlineAudio size={24} />, color: "yellow", enabled: hasAudioUrl },
+    { id: "audioInput2", label: "Text", icon: <span className="text-lg font-black leading-none">T</span>, color: "blue", enabled: hasPrompt },
+    { id: "audioInput3", label: "Image", icon: <IoImageOutline size={22} />, color: "green", enabled: hasImageUrl },
+    { id: "audioInput4", label: "Video", icon: <IoVideocamOutline size={22} />, color: "orange", enabled: hasVideoUrl },
+  ].filter((handle) => handle.enabled);
+
+  const renderInputHandle = (handle, index) => {
+    const connected = connectedInputs[handle.id];
+    const classes = colorClasses[handle.color];
+    return (
+      <div
+        key={handle.id}
+        className={`group/handle absolute -left-16 z-20 flex h-[52px] w-[52px] items-center justify-center rounded-full transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 ${connected ? `pointer-events-auto opacity-100 ${classes.active}` : `${visibilityClasses} text-zinc-300`}`}
+        style={{ top: 92 + index * 64 }}
+      >
+        <Handle
+          type="target"
+          position={Position.Left}
+          id={handle.id}
+          style={{
+            left: 0,
+            top: 26,
+            width: 52,
+            height: 52,
+            opacity: 1,
+            pointerEvents: "auto",
+          }}
+          className={`!rounded-full !border-[3px] transition-all ${connected ? classes.active : classes.idle}`}
+          data-type={handle.color}
+        />
+        <span className="pointer-events-none relative z-10 text-current">{handle.icon}</span>
+        <span className={`pointer-events-none absolute -left-20 hidden w-16 text-right text-[10px] font-semibold uppercase tracking-wide ${classes.label} group-hover/handle:block`}>
+          {handle.label}
+        </span>
+      </div>
+    );
+  };
+
   return (
     <div 
       style={{ minHeight: 220, '--loader-color': '#eab308' }}
       className={`
-        nowheel group flex flex-col flex-1 w-80 
-        rounded-2xl border-2 relative transition-all duration-300 ease-in-out 
+        nowheel group flex flex-col flex-1 w-[500px]
+        rounded-[26px] border-[3px] relative transition-all duration-300 ease-in-out
         ${selected 
-          ? "border-yellow-500 shadow-[0_0_25px_rgba(234,179,8,0.3)] scale-[1.02] ring-1 ring-yellow-500/20" 
-          : "border-zinc-800 hover:border-zinc-700 shadow-lg"} 
-        bg-[#0c0d0f]/95 backdrop-blur-sm
+          ? "border-yellow-500 shadow-[0_0_30px_rgba(234,179,8,0.24)] ring-2 ring-yellow-500/20"
+          : "border-yellow-600/70 hover:border-yellow-500 shadow-[0_0_20px_rgba(234,179,8,0.08)]"}
+        bg-[#101010]/95 backdrop-blur-sm overflow-visible
       `}
     >
       {data.isLoading && (
@@ -447,13 +513,13 @@ const AudioGeneration = ({ id, data, selected }) => {
         )}
       </div>
       <div className="flex flex-col">
-        <div className="flex items-center justify-between bg-gradient-to-r from-[#151618] to-[#1c1e21] rounded-t-2xl border-b border-zinc-800 py-2 px-3">
-          <div className="flex items-center gap-2.5">
-            <div className={`p-1.5 rounded-lg ${selected ? "bg-yellow-500 text-black" : "bg-zinc-800 text-zinc-400"} transition-colors`}>
-              <AiOutlineAudio size={14} />
+        <div className="flex items-center justify-between rounded-t-[22px] border-b border-yellow-500/20 bg-[#111111]/95 px-5 py-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-yellow-600 text-black shadow-[0_0_16px_rgba(234,179,8,0.22)] transition-colors">
+              <AiOutlineAudio size={25} />
             </div>
-            <h3 className="text-xs font-bold text-zinc-100">
-              {selectedModel.name}
+            <h3 className="text-xl font-black tracking-tight text-zinc-200">
+              {data.selectedModel?.id === "audio-passthrough" ? "Input Audio" : selectedModel.name}
             </h3>
           </div>
           {outputHistory.length > 0 && (
@@ -512,7 +578,7 @@ const AudioGeneration = ({ id, data, selected }) => {
         </div>
       </div>
       {data.selectedModel?.id === "audio-passthrough" ? (
-        <div className="w-full h-full flex-1">
+        <div className="w-full h-full flex-1 overflow-hidden rounded-b-[22px]">
           <UploadNode id={id} data={data} formValues={formValues} setFormValues={setFormValues} selectedModel={selectedModel} loading={loading} uploadType="upload" acceptType="audio" />
         </div>
       ) : (
@@ -573,157 +639,36 @@ const AudioGeneration = ({ id, data, selected }) => {
           )}
         </div>
       )}
-      <Handle  
-        type="target" 
-        position={Position.Left} 
-        id="audioInput" 
-        style={{ 
-          top: 70,
-          opacity: hasAudioUrl ? 1 : 0,
-          pointerEvents: hasAudioUrl ? 'auto' : 'none',
-          width: 12,
-          height: 12,
-          transition: 'all 0.2s ease-in-out',
-        }}  
-        className={`!rounded-full !border-[3px] !left-[-8px] transition-all
-          ${connectedInputs.audioInput 
-            ? '!bg-yellow-500 !border-zinc-900 shadow-[0_0_15px_rgba(234,179,8,0.8)]' 
-            : '!bg-zinc-900 !border-yellow-500/50 hover:!border-yellow-500 shadow-sm'
-          }
-        `}
-        data-type="yellow"
-      />
-      {hasAudioUrl && (
-        <p 
-          className={`absolute -left-7 top-[70px] text-xs text-yellow-500 transition-opacity duration-200 ${
-            data.activeHandleColor === "yellow" 
-              ? "opacity-100" 
-              : "opacity-0 group-hover:opacity-100"
+      {inputHandleItems.map(renderInputHandle)}
+      <div
+        className={`group/handle absolute -right-16 top-[92px] z-20 flex h-[52px] w-[52px] items-center justify-center rounded-full transition-all duration-200 ${
+          selected || connectedOutputs.audioOutput ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100"
+        } ${connectedOutputs.audioOutput ? "bg-yellow-500 text-white shadow-[0_0_18px_rgba(234,179,8,0.75)]" : "text-zinc-300"}`}
+      >
+        <Handle
+          type="source"
+          position={Position.Right}
+          id="audioOutput"
+          style={{
+            right: 0,
+            top: 26,
+            width: 52,
+            height: 52,
+            opacity: 1,
+            pointerEvents: "auto",
+          }}
+          className={`!rounded-full !border-[3px] transition-all ${
+            connectedOutputs.audioOutput
+              ? "!bg-yellow-500 !border-yellow-300 text-white shadow-[0_0_18px_rgba(234,179,8,0.75)]"
+              : "!bg-[#252525] !border-[#252525] text-zinc-300 hover:!border-yellow-400"
           }`}
-        > 
-          Audio 
-        </p>
-      )}
-      <Handle 
-        type="target" 
-        position={Position.Left} 
-        id="audioInput2" 
-        style={{ 
-          top: 100,
-          opacity: hasPrompt ? 1 : 0,
-          pointerEvents: hasPrompt ? 'auto' : 'none',
-          width: 12,
-          height: 12,
-          transition: 'all 0.2s ease-in-out',
-        }} 
-        className={`!rounded-full !border-[3px] !left-[-8px] transition-all
-          ${connectedInputs.audioInput2 
-            ? '!bg-blue-600 !border-zinc-900 shadow-[0_0_15px_rgba(37,99,235,0.8)]' 
-            : '!bg-zinc-900 !border-blue-600/50 hover:!border-blue-600 shadow-sm'
-          }
-        `}
-        data-type="blue"
-      />
-      {hasPrompt && (
-        <p 
-          className={`absolute -left-8 top-[100px] text-xs text-blue-500 transition-opacity duration-200 ${
-            data.activeHandleColor === "blue"
-              ? "opacity-100" 
-              : "opacity-0 group-hover:opacity-100"
-          }`}
-        > 
-          Text 
-        </p>
-      )}
-      <Handle 
-        type="target" 
-        position={Position.Left} 
-        id="audioInput3" 
-        style={{ 
-          top: 130,
-          opacity: hasImageUrl ? 1 : 0,
-          pointerEvents: hasImageUrl ? 'auto' : 'none',
-          width: 12,
-          height: 12,
-          transition: 'all 0.2s ease-in-out',
-        }} 
-        className={`!rounded-full !border-[3px] !left-[-8px] transition-all
-          ${connectedInputs.audioInput3 
-            ? '!bg-emerald-600 !border-zinc-900 shadow-[0_0_15px_rgba(16,185,129,0.8)]' 
-            : '!bg-zinc-900 !border-emerald-600/50 hover:!border-emerald-600 shadow-sm'
-          }
-        `}
-        data-type="green" 
-      />
-      {hasImageUrl && (
-        <p 
-          className={`absolute -left-10 top-[130px] text-xs text-green-500 transition-opacity duration-200 ${
-            data.activeHandleColor === "green"
-              ? "opacity-100" 
-              : "opacity-0 group-hover:opacity-100"
-          }`}
-        > 
-          Image 
-        </p>
-      )}
-      <Handle 
-        type="target" 
-        position={Position.Left} 
-        id="audioInput4"
-        style={{ 
-          top: 160,
-          opacity: hasVideoUrl ? 1 : 0,
-          pointerEvents: hasVideoUrl ? 'auto' : 'none',
-          width: 12,
-          height: 12,
-          transition: 'all 0.2s ease-in-out',
-        }} 
-        className={`!rounded-full !border-[3px] !left-[-8px] transition-all
-          ${connectedInputs.audioInput4 
-            ? '!bg-orange-600 !border-zinc-900 shadow-[0_0_15px_rgba(249,115,22,0.8)]' 
-            : '!bg-zinc-900 !border-orange-600/50 hover:!border-orange-600 shadow-sm'
-          }
-        `}
-        data-type="orange"
-      />
-      {hasVideoUrl && (
-        <p 
-          className={`absolute -left-10 top-[160px] text-xs text-orange-500 transition-opacity duration-200 ${
-            data.activeHandleColor === "orange"
-              ? "opacity-100" 
-              : "opacity-0 group-hover:opacity-100"
-          }`}
-        > 
-          Video
-        </p>
-      )}
-      <Handle 
-        type="source" 
-        position={Position.Right} 
-        id="audioOutput" 
-        style={{ 
-          top: 100,
-          width: 12,
-          height: 12,
-          transition: 'all 0.2s ease-in-out',
-        }} 
-        className={`!rounded-full !border-[3px] !right-[-8px] transition-all
-          ${connectedOutputs.audioOutput 
-            ? '!bg-yellow-500 !border-zinc-900 shadow-[0_0_15px_rgba(234,179,8,0.8)]' 
-            : '!bg-zinc-900 !border-yellow-500/50 hover:!border-yellow-500 shadow-sm'
-          }
-        `}
-        data-type="yellow"
-      />
-      <p 
-        className={`absolute -right-10 top-[100px] text-xs text-yellow-500 transition-opacity duration-200 ${
-          data.activeHandleColor === "yellow" 
-            ? "opacity-100" 
-            : "opacity-0 group-hover:opacity-100"
-        }`}
-      > 
-        Audio 
-      </p>
+          data-type="yellow"
+        />
+        <AiOutlineAudio size={24} className="pointer-events-none relative z-10 text-current" />
+        <span className="pointer-events-none absolute left-16 hidden w-24 text-left text-[10px] font-semibold uppercase tracking-wide text-yellow-400 group-hover/handle:block">
+          Audio
+        </span>
+      </div>
     </div>
   );
 };

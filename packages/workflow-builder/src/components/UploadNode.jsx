@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from "react";
 import { toast } from "react-hot-toast";
 import { FiUpload } from "react-icons/fi";
-import axios from "axios";
 import AudioPlayer from "./AudioPlayer";
 import VideoPlayer from "./VideoPlayer";
 import { IoImageOutline, IoTrashOutline } from "react-icons/io5";
+import { uploadFile } from "./uploadFile";
 
 const UploadNode = ({ id, data, formValues, setFormValues, selectedModel, loading, uploadType, acceptType }) => {
   const [uploading, setUploading] = useState(false);
@@ -48,38 +48,28 @@ const UploadNode = ({ id, data, formValues, setFormValues, selectedModel, loadin
     };
 
     setUploading(true);
-    axios.get("/api/app/get_file_upload_url", {
-      params: { filename: file.name }
+    uploadFile(file, (progressEvent) => {
+      if (progressEvent.total) {
+        const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+        setUploadProgress(percentCompleted);
+      }
     })
-    .then((response) => {
-      const { url, fields } = response.data;
-
-      const formData = new FormData();
-      Object.entries(fields).forEach(([key, value]) => {
-        formData.append(key, value);
-      });
-      formData.append("file", file);
-      axios.post(url, formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-        onUploadProgress: (progressEvent) => {
-          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-          setUploadProgress(percentCompleted);
-        }
-      })
-      .then(() => {
-        const prefix = "https://cdn.muapi.ai/";
-        const uploadedUrl = prefix + fields.key;
+    .then((uploadedUrl) => {
         setFormValues(prev => ({ ...prev, [type]: uploadedUrl }));
 
         setTimeout(() => {
           setUploading(false);
           setUploadProgress(0);
         }, 500);
-      })
     })
     .catch((error) => {
-      console.error("Upload failed", error);
-      toast.error("Upload failed.", error?.response?.data);
+      const status = error?.response?.status;
+      const detail = error?.response?.data?.detail || error?.response?.data || error?.message;
+      console.error("Local upload failed", {
+        status,
+        detail,
+      });
+      toast.error(`Upload failed${status ? ` (${status})` : ""}`);
       setUploading(false);
       setUploadProgress(0);
     })  
@@ -185,6 +175,7 @@ const UploadNode = ({ id, data, formValues, setFormValues, selectedModel, loadin
 
   const hasFileUrl = formValues?.image_url || formValues?.video_url || formValues?.audio_url;
   const textareaRef = useRef(null);
+  const isAudioUpload = acceptType === "audio";
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -196,30 +187,31 @@ const UploadNode = ({ id, data, formValues, setFormValues, selectedModel, loadin
   }, [formValues?.prompt]);
 
   return (
-    <div className="flex flex-col w-full flex-1 overflow-hidden rounded-b-2xl h-full">
-      <div className="flex flex-col items-center justify-center w-full h-full flex-1">
+    <div className="flex h-full min-h-[inherit] w-full flex-1 flex-col overflow-hidden rounded-[inherit]">
+      <div className="flex h-full min-h-[inherit] w-full flex-1 flex-col items-center justify-center">
         {uploadType === "text" ? (
           <textarea
             ref={textareaRef}
-            className="bg-transparent border border-gray-800 w-full h-full max-h-96 p-2 text-xs text-white resize-none overflow-y-auto custom-scrollbar"
-            placeholder="Enter your text prompt here..."
+            className="nodrag nowheel h-full min-h-[280px] w-full resize-none bg-transparent p-8 text-xl font-medium leading-relaxed text-zinc-200 outline-none placeholder:text-zinc-500 custom-scrollbar"
+            placeholder='Try "Happy dog with sunglasses and floating ring"'
             value={formValues?.prompt || ""}
+            onPointerDown={(event) => event.stopPropagation()}
             onChange={handleTextChange}
           />
         ) : uploadType === "upload" && (
           <div 
-            className="flex flex-col items-center justify-center w-full h-full relative" 
+            className="relative flex h-full min-h-[inherit] w-full flex-1 flex-col items-center justify-center"
             onDragOver={handleDragOver} onDrop={handleDrop}
           >
             {uploading ? (
-              <div className="flex flex-col justify-center gap-2 w-full h-full max-w-[95%]">
+              <div className="flex h-full w-full max-w-[95%] flex-col justify-center gap-2">
                 <h4 className="text-xs text-white">Uploading... {uploadProgress}%</h4>
                 <div className="w-full bg-gray-100 rounded h-1 overflow-hidden">
                   <div className="bg-blue-500 h-full" style={{ width: `${uploadProgress}%` }}></div>
                 </div>
               </div>
             ) : hasFileUrl ? (
-              <div className="flex-1 w-full h-full group z-0">
+              <div className="group z-0 h-full min-h-[inherit] w-full flex-1">
                 {formValues?.video_url ? (
                   <div className="relative w-full h-full">
                     <VideoPlayer 
@@ -228,11 +220,11 @@ const UploadNode = ({ id, data, formValues, setFormValues, selectedModel, loadin
                     />
                   </div>
                 ) : formValues?.image_url ? (
-                  <div className="relative w-full h-full group/image">
+                  <div className="group/image relative h-full min-h-[inherit] w-full">
                     <img
                       src={formValues?.image_url}
                       alt="Uploaded"
-                      className="w-full h-full object-contain"
+                      className="h-full min-h-[inherit] w-full object-contain"
                     />
                     <div className="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/80 via-black/40 to-transparent opacity-0 group-hover/image:opacity-100 transition-opacity duration-300 pointer-events-none flex flex-col justify-end">
                       <div className="flex items-center justify-between">
@@ -252,7 +244,7 @@ const UploadNode = ({ id, data, formValues, setFormValues, selectedModel, loadin
                     </div>
                   </div>
                 ) : (
-                  <div className="w-full h-full relative group/audio flex flex-col items-center justify-center">
+                  <div className={`relative flex h-full w-full flex-col items-center justify-center group/audio ${isAudioUpload ? "bg-[#0d0d0d]" : ""}`}>
                     <AudioPlayer 
                       nodeId={id}
                       src={formValues?.audio_url} 
@@ -271,11 +263,15 @@ const UploadNode = ({ id, data, formValues, setFormValues, selectedModel, loadin
               </div>
             ) : (
               <label 
-                style={{ minHeight: 200 }} 
-                className="cursor-pointer flex flex-col items-center justify-center gap-2 text-gray-400 border border-dashed border-gray-600 rounded-lg p-4 w-full flex-1 hover:bg-gray-700/50 h-full"
-              >                <FiUpload size={20} />
-                <span className="text-xs capitalize">Upload {acceptType}</span>
-                <span className="text-xs text-gray-500">Hint: drag and drop file(s) here.</span>
+                className={`flex h-full min-h-[inherit] w-full flex-1 cursor-pointer flex-col items-center justify-center gap-3 rounded-[inherit] border border-dashed p-8 transition ${
+                  isAudioUpload
+                    ? "border-yellow-500/25 bg-[#0d0d0d] text-zinc-500 hover:border-yellow-500/50 hover:bg-yellow-500/5"
+                    : "border-zinc-600/70 bg-zinc-900/20 text-zinc-500 hover:bg-zinc-800/40"
+                }`}
+              >
+                <FiUpload size={isAudioUpload ? 40 : 28} />
+                <span className={`${isAudioUpload ? "text-3xl" : "text-base"} font-medium capitalize`}>Upload {acceptType}</span>
+                <span className={`${isAudioUpload ? "text-2xl" : "text-sm"} text-zinc-600`}>Hint: drag and drop file(s) here.</span>
                 <input
                   type="file"
                   accept={acceptType === "image" ? "image/*": acceptType === "video" ? "video/*": "audio/*"}
