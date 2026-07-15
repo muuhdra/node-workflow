@@ -1,9 +1,11 @@
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
-from pathlib import Path
 
-# Store the database file in the server directory
-DB_PATH = Path(__file__).resolve().parent.parent / "workflows.db"
+from app.storage import get_data_dir
+
+DATA_DIR = get_data_dir()
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+DB_PATH = DATA_DIR / "workflows.db"
 DATABASE_URL = f"sqlite+aiosqlite:///{DB_PATH}"
 
 engine = create_async_engine(DATABASE_URL, echo=False)

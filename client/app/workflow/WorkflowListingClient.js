@@ -3,24 +3,23 @@
 import axios from "axios";
 import Link from "next/link";
 import Image from "next/image";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { FaRegEdit } from "react-icons/fa";
 import { FaPlus } from "react-icons/fa6";
-import { FiTrash2 } from "react-icons/fi";
+import { FiImage, FiTrash2, FiX } from "react-icons/fi";
 import { GoWorkflow } from "react-icons/go";
 import { SlOptions } from "react-icons/sl";
 import { toast } from "react-hot-toast";
-import { HiOutlineArrowRight } from "react-icons/hi2";
-import { useRouter } from "next/navigation";
 
 const WorkflowListingClient = ({ initialWorkflowList }) => {
-  const router = useRouter();
-
   const [workflowList, setWorkflowList] = useState(initialWorkflowList || []);
   const [loading, setLoading] = useState(false);
   const [dropDown, setDropDown] = useState(0);
   const [workflowName, setWorkflowName] = useState("");
   const [renameId, setRenameId] = useState(null);
+  const [coverBusyId, setCoverBusyId] = useState(null);
+  const coverInputRef = useRef(null);
+  const coverTargetIdRef = useRef(null);
 
   useEffect(() => {
     const fromBuilder = sessionStorage.getItem("fromWorkflowBuilder");
@@ -29,22 +28,6 @@ const WorkflowListingClient = ({ initialWorkflowList }) => {
       window.location.reload();
     }
   }, []);
-
-  const getUserWorkflowDefs = () => {
-    setLoading(true);
-    axios.get('/api/workflow/get-workflow-defs')
-      .then((response) => {
-        setWorkflowList(response.data);
-      })
-      .catch((error) => {
-        console.error(error);
-        toast.error(error.response?.data?.error || "Failed to fetch workflows");
-        setWorkflowList([]);
-      })
-      .finally(() => {
-        setLoading(false);
-      });
-  };
 
   const handleDeleteWorkflow = (deleteId) => {
     const confirmDelete = window.confirm(
@@ -62,6 +45,96 @@ const WorkflowListingClient = ({ initialWorkflowList }) => {
         console.error(error);
         toast.error(error.response?.data?.error || "Failed to delete workflow");
       });
+  };
+
+  const openCoverPicker = (workflowId) => {
+    coverTargetIdRef.current = workflowId;
+    setDropDown(0);
+    coverInputRef.current?.click();
+  };
+
+  const handleCoverUpload = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    const workflowId = coverTargetIdRef.current;
+    if (!file || !workflowId) return;
+
+    const allowedTypes = new Set([
+      "image/avif",
+      "image/gif",
+      "image/jpeg",
+      "image/png",
+      "image/webp",
+    ]);
+    if (!allowedTypes.has(file.type)) {
+      toast.error("Choose a JPG, PNG, WebP, GIF, or AVIF image");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error("Cover images must be smaller than 10 MB");
+      return;
+    }
+
+    setCoverBusyId(workflowId);
+    try {
+      const uploadResponse = await axios.post(
+        `/api/app/upload?filename=${encodeURIComponent(file.name)}`,
+        file,
+        { headers: { "Content-Type": file.type } },
+      );
+      const coverResponse = await axios.post(
+        `/api/workflow/${workflowId}/thumbnail`,
+        { thumbnail_url: uploadResponse.data.url },
+      );
+      setWorkflowList((previousWorkflows) =>
+        previousWorkflows.map((workflow) =>
+          workflow.id === workflowId
+            ? {
+                ...workflow,
+                thumbnail: coverResponse.data.thumbnail,
+                updated_at: coverResponse.data.updated_at,
+              }
+            : workflow,
+        ),
+      );
+      toast.success("Workflow cover updated");
+    } catch (error) {
+      console.error(error);
+      toast.error(error.response?.data?.detail || "Failed to update cover");
+    } finally {
+      setCoverBusyId(null);
+      coverTargetIdRef.current = null;
+    }
+  };
+
+  const handleRemoveCover = async (workflowId) => {
+    if (!window.confirm("Remove this workflow cover?")) return;
+
+    setDropDown(0);
+    setCoverBusyId(workflowId);
+    try {
+      const response = await axios.post(
+        `/api/workflow/${workflowId}/thumbnail`,
+        { thumbnail_url: null },
+      );
+      setWorkflowList((previousWorkflows) =>
+        previousWorkflows.map((workflow) =>
+          workflow.id === workflowId
+            ? {
+                ...workflow,
+                thumbnail: null,
+                updated_at: response.data.updated_at,
+              }
+            : workflow,
+        ),
+      );
+      toast.success("Workflow cover removed");
+    } catch (error) {
+      console.error(error);
+      toast.error(error.response?.data?.detail || "Failed to remove cover");
+    } finally {
+      setCoverBusyId(null);
+    }
   };
 
   const handleRenameWorkflow = (id, newName) => {
@@ -121,6 +194,13 @@ const WorkflowListingClient = ({ initialWorkflowList }) => {
 
   return (
     <>
+      <input
+        ref={coverInputRef}
+        type="file"
+        accept="image/avif,image/gif,image/jpeg,image/png,image/webp"
+        className="hidden"
+        onChange={handleCoverUpload}
+      />
       <div className="relative z-10 max-w-7xl mx-auto px-6 py-12 md:px-12">
         <header className="flex flex-col gap-8 mb-16">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
@@ -166,11 +246,15 @@ const WorkflowListingClient = ({ initialWorkflowList }) => {
                   <Link href={`/workflow/${work.id}`} className="absolute inset-0 z-0">
                     {work.thumbnail ? (
                       <>
-                        <div
-                          className="absolute inset-0 bg-center bg-cover opacity-60 group-hover:opacity-100 transition-opacity transform group-hover:scale-105 duration-500"
-                          style={{ backgroundImage: `url(${work.thumbnail})` }}
+                        <Image
+                          src={work.thumbnail}
+                          alt={`Cover for ${work.name || "workflow"}`}
+                          fill
+                          sizes="(min-width: 1280px) 20vw, (min-width: 1024px) 25vw, (min-width: 640px) 50vw, 100vw"
+                          className="object-cover opacity-75 transition duration-500 group-hover:scale-105 group-hover:opacity-100"
+                          unoptimized
                         />
-                        <div className="absolute inset-0 bg-gradient-to-t from-[#030303] via-[#030303]/40 to-transparent shadow-[inset_0_-40px_80px_-20px_rgba(0,0,0,0.8)]" />
+                        <div className="absolute inset-0 bg-gradient-to-t from-[#030303] via-[#030303]/20 to-black/10 shadow-[inset_0_-40px_80px_-20px_rgba(0,0,0,0.8)]" />
                       </>
                     ) : (
                       <div className="absolute inset-0 bg-white/[0.02] group-hover:bg-white/[0.05] transition-colors flex items-center justify-center">
@@ -179,8 +263,17 @@ const WorkflowListingClient = ({ initialWorkflowList }) => {
                     )}
                   </Link>
 
+                  {coverBusyId === work.id && (
+                    <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+                      <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-blue-500" />
+                      <span className="sr-only">Updating workflow cover</span>
+                    </div>
+                  )}
+
                   <div className="absolute top-4 right-4 z-20">
                     <button
+                      type="button"
+                      aria-label={`Open actions for ${work.name || "workflow"}`}
                       onClick={(e) => {
                         e.preventDefault();
                         setDropDown(dropDown === work.id ? 0 : work.id);
@@ -191,10 +284,33 @@ const WorkflowListingClient = ({ initialWorkflowList }) => {
                     </button>
                     {dropDown === work.id && (
                       <div 
-                        className="absolute right-0 mt-2 w-36 py-1 bg-[#111] border border-white/10 rounded-xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2"
+                        className="absolute right-0 mt-2 w-48 py-1 bg-[#111] border border-white/10 rounded-lg shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2"
                         onMouseLeave={() => setDropDown(0)}
                       >
                         <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            openCoverPicker(work.id);
+                          }}
+                          className="w-full flex items-center gap-3 px-4 py-2 text-sm text-zinc-300 hover:bg-white/5 hover:text-white transition-colors"
+                        >
+                          <FiImage size={14} /> {work.thumbnail ? "Replace cover" : "Add cover"}
+                        </button>
+                        {work.thumbnail && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              handleRemoveCover(work.id);
+                            }}
+                            className="w-full flex items-center gap-3 px-4 py-2 text-sm text-zinc-300 hover:bg-white/5 hover:text-white transition-colors"
+                          >
+                            <FiX size={14} /> Remove cover
+                          </button>
+                        )}
+                        <button
+                          type="button"
                           onClick={(e) => {
                             e.preventDefault();
                             setRenameId(work.id);
@@ -205,6 +321,7 @@ const WorkflowListingClient = ({ initialWorkflowList }) => {
                           <FaRegEdit size={14} /> Rename
                         </button>
                         <button
+                          type="button"
                           onClick={(e) => {
                             e.preventDefault();
                             handleDeleteWorkflow(work.id);

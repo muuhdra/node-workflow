@@ -16,7 +16,9 @@ FROM python:3.13-slim AS production
 WORKDIR /app
 
 RUN groupadd --system --gid 1001 appgroup && \
-    useradd --system --uid 1001 --gid appgroup appuser
+    useradd --system --uid 1001 --gid appgroup appuser && \
+    mkdir -p /app/data && \
+    chown appuser:appgroup /app/data
 
 COPY --from=builder /root/.local /home/appuser/.local
 ENV PATH=/home/appuser/.local/bin:$PATH

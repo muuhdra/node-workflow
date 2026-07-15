@@ -52,6 +52,7 @@ const VideoGeneration = ({ id, data, selected }) => {
   const videoRef = useRef(null);
   const outputHistory = data.outputHistory || [];
   const prevHistoryLengthRef = useRef(outputHistory.length);
+  const resumedRunRef = useRef(null);
   const workflowId = getWorkflowId();
   const runId = data.runId ?? getRunId();
   const nodeSchemas = data.nodeSchemas || {};
@@ -268,6 +269,12 @@ const VideoGeneration = ({ id, data, selected }) => {
       });
     }, 3000);
   };
+
+  useEffect(() => {
+    if (!data.isLoading || !runId || resumedRunRef.current === runId) return;
+    resumedRunRef.current = runId;
+    pollNodeStatus(runId);
+  }, [data.isLoading, runId]);
 
   const handleRunSingleNode = async () => {
     try {

@@ -13,6 +13,10 @@ const {
   sanitizeWorkflowEdges,
   wouldCreateCycle,
 } = require("../dist/components/connectionState");
+const {
+  getInputImageIdentity,
+  sanitizeNodeIdentity,
+} = require("../dist/components/nodeIdentity");
 
 const edge = (id, source, target, targetHandle, sourceHandle = "output") => ({
   id,
@@ -29,6 +33,32 @@ const getValues = (node) => Array.isArray(node?.data?.resultUrl)
   : node?.data?.resultUrl
     ? [node.data.resultUrl]
     : [];
+
+test("input image identity uses a stable default and trims persisted metadata", () => {
+  assert.deepEqual(getInputImageIdentity({}, "image12"), {
+    label: "Input Image #12",
+    description: "",
+  });
+  assert.deepEqual(getInputImageIdentity({
+    node_label: "  Main character  ",
+    node_description: "  Keep the red coat and round glasses  ",
+  }, "image1"), {
+    label: "Main character",
+    description: "Keep the red coat and round glasses",
+  });
+});
+
+test("input image identity is bounded before workflow persistence", () => {
+  const identity = sanitizeNodeIdentity({
+    label: `  ${"A".repeat(80)}  `,
+    description: `  ${"B".repeat(220)}  `,
+  });
+
+  assert.equal(identity.node_label.length, 60);
+  assert.equal(identity.node_description.length, 180);
+  assert.equal(identity.node_label, "A".repeat(60));
+  assert.equal(identity.node_description, "B".repeat(180));
+});
 
 test("findRemovedEdges detects removals independently of array identity", () => {
   const first = edge("a", "text1", "image1", "imageInput", "textOutput");

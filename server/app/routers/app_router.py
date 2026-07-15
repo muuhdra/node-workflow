@@ -1,14 +1,14 @@
 import uuid
-from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 
+from app.storage import get_upload_dir
 from app.utils.workflow_helper import (
     calculate_dynamic_cost_helper,
 )
 
 router = APIRouter()
-UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads"
+UPLOAD_DIR = get_upload_dir()
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 ALLOWED_MEDIA_TYPES = {
     "image/jpeg",

@@ -15,11 +15,15 @@ from app.services.aiml_models import (
     build_aiml_payload,
     extract_output_urls,
 )
+from app.services.run_repository import (
+    delete_node_run as delete_persisted_node_run,
+)
+from app.services.run_repository import get_run, save_run
+from app.storage import get_upload_dir
 
 logger = logging.getLogger(__name__)
 BASE_URL = "https://api.aimlapi.com"
-RUNS = {}
-UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads"
+UPLOAD_DIR = get_upload_dir()
 
 
 def _api_key():
@@ -131,44 +135,47 @@ def _result(node_run_id, model_id, urls, *, error=None):
     }
 
 
-def _store_node_run(run_id, node_id, node_run):
-    current_run = RUNS.get(run_id, {"nodes": {}})
+async def _store_node_run(workflow_id, run_id, node_id, node_run):
+    persisted_run = await get_run(run_id)
+    if persisted_run and persisted_run["workflow_id"] != workflow_id:
+        raise HTTPException(status_code=409, detail="Run belongs to another workflow")
+    current_run = persisted_run or {"nodes": {}}
     current_nodes = current_run.get("nodes", {})
     current_history = current_nodes.get(node_id, [])
-    updated_run = {
-        **current_run,
-        "nodes": {
-            **current_nodes,
-            node_id: [*current_history, node_run],
-        },
+    updated_nodes = {
+        **current_nodes,
+        node_id: [*current_history, node_run],
     }
-    globals()["RUNS"] = {**RUNS, run_id: updated_run}
+    await save_run(run_id, workflow_id, updated_nodes)
 
 
-def _replace_node_run(run_id, node_id, node_run_id, replacement):
-    current_run = RUNS.get(run_id, {"nodes": {}})
+async def _replace_node_run(run_id, node_id, node_run_id, replacement):
+    current_run = await get_run(run_id)
+    if not current_run:
+        raise HTTPException(status_code=404, detail="Generation run not found")
     current_nodes = current_run.get("nodes", {})
     history = current_nodes.get(node_id, [])
     updated_history = [
         replacement if item.get("node_run_id") == node_run_id else item
         for item in history
     ]
-    globals()["RUNS"] = {
-        **RUNS,
-        run_id: {
-            **current_run,
-            "nodes": {**current_nodes, node_id: updated_history},
-        },
-    }
+    await save_run(
+        run_id,
+        current_run["workflow_id"],
+        {**current_nodes, node_id: updated_history},
+    )
 
 
-async def submit_node(node_id, model_id, params, run_id=None):
+async def submit_node(workflow_id, node_id, model_id, params, run_id=None):
     try:
         request_payload = _resolve_local_media(build_aiml_payload(model_id, params))
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
     run_id = run_id or str(uuid.uuid4())
+    persisted_run = await get_run(run_id)
+    if persisted_run and persisted_run["workflow_id"] != workflow_id:
+        raise HTTPException(status_code=409, detail="Run belongs to another workflow")
     node_run_id = str(uuid.uuid4())
     started_at = datetime.now(timezone.utc).isoformat()
 
@@ -214,7 +221,7 @@ async def submit_node(node_id, model_id, params, run_id=None):
     else:
         raise HTTPException(422, f"Unsupported AI/ML API model: {model_id}")
 
-    _store_node_run(run_id, node_id, node_run)
+    await _store_node_run(workflow_id, run_id, node_id, node_run)
     return {"run_id": run_id, "node_run_id": node_run_id}
 
 
@@ -257,12 +264,12 @@ async def _refresh_node_run(run_id, node_id, node_run):
     else:
         replacement = node_run
 
-    _replace_node_run(run_id, node_id, node_run["node_run_id"], replacement)
+    await _replace_node_run(run_id, node_id, node_run["node_run_id"], replacement)
     return replacement
 
 
 async def get_run_status(run_id):
-    run = RUNS.get(run_id)
+    run = await get_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Generation run not found")
 
@@ -275,25 +282,8 @@ async def get_run_status(run_id):
     return {"run_id": run_id, "nodes": refreshed_nodes}
 
 
-def create_run():
-    run_id = str(uuid.uuid4())
-    globals()["RUNS"] = {**RUNS, run_id: {"nodes": {}}}
-    return run_id
-
-
-def delete_node_run(node_run_id):
-    updated_runs = {}
-    found = False
-    for run_id, run in RUNS.items():
-        updated_nodes = {}
-        for node_id, history in run.get("nodes", {}).items():
-            updated_history = [
-                item for item in history if item.get("node_run_id") != node_run_id
-            ]
-            found = found or len(updated_history) != len(history)
-            updated_nodes[node_id] = updated_history
-        updated_runs[run_id] = {**run, "nodes": updated_nodes}
-    globals()["RUNS"] = updated_runs
+async def delete_node_run(node_run_id):
+    found = await delete_persisted_node_run(node_run_id)
     if not found:
         raise HTTPException(status_code=404, detail="Node run not found")
     return {"message": "Node run deleted"}

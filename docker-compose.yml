@@ -7,7 +7,7 @@ services:
         API_URL: http://server:8000
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       NODE_ENV: production
       API_URL: http://server:8000
@@ -29,9 +29,12 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       AIMLAPI_KEY: ${AIMLAPI_KEY}
+      WORKFLOW_DATA_DIR: /app/data
+    volumes:
+      - workflow-data:/app/data
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 30s
@@ -44,3 +47,6 @@ services:
 networks:
   app-network:
     driver: bridge
+
+volumes:
+  workflow-data:

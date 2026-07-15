@@ -26,6 +26,8 @@ async def create_workflow(request: Request):
         payload = await request.json()
         return await create_or_update_workflow(payload)
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(status_code=400, detail=str(e))
 
 

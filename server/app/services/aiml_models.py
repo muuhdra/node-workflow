@@ -289,7 +289,7 @@ def build_aiml_payload(model_id, params):
             payload["model"] = "flux/kontext-pro/image-to-image"
             payload["image_url"] = references
         else:
-            payload["model"] = "flux-pro/kontext/text-to-image"
+            payload["model"] = "flux/kontext-pro/text-to-image"
         return payload
 
     if model_id == "bytedance/seedream-5-0-lite-preview":
@@ -297,7 +297,7 @@ def build_aiml_payload(model_id, params):
         height = payload.pop("height", None)
         if width is not None and height is not None:
             payload["image_size"] = {"width": width, "height": height}
-        payload["model"] = "bytedance/seedream-5-0-lite"
+        payload["model"] = model_id
         if references:
             payload["image_urls"] = references
         return payload
@@ -322,12 +322,11 @@ def build_aiml_payload(model_id, params):
         payload["model"] = "bytedance/dreamina-seedance-2-0"
         return payload
 
-    upstream_model_ids = {
-        "google/nano-banana-2": NANO_BANANA_UPSTREAM_ID,
-        "alibaba/wan-2-6-image-to-video-flash": "alibaba/wan2.6-i2v-flash",
-        "google/veo-3.1-i2v-fast": "veo3.1/fast/image-to-video",
-    }
-    payload["model"] = upstream_model_ids.get(model_id, model_id)
+    payload["model"] = (
+        NANO_BANANA_UPSTREAM_ID
+        if model_id == "google/nano-banana-2"
+        else model_id
+    )
 
     if references:
         payload["image_urls"] = references
@@ -345,6 +344,7 @@ def build_aiml_payload(model_id, params):
 def calculate_generation_cost(model_id, params):
     count = max(1, int(params.get("num_outputs", 1) or 1))
     image_prices = {
+        "google/nano-banana-2": 0.039,
         "bytedance/seedream-5-0-lite-preview": 0.0455,
         "flux-kontext-pro": 0.052,
     }

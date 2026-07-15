@@ -6,8 +6,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.database import create_db_and_tables
+from app.database import create_db_and_tables, engine
 from app.models import Workflow  # noqa: F401 — ensures table is registered
+from app.storage import get_upload_dir
 
 from .routers import app_router, workflow_router
 
@@ -21,17 +22,18 @@ load_dotenv(dotenv_path=server_env_path)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: create SQLite tables if they don't exist
     await create_db_and_tables()
-    yield
-    # Shutdown (nothing to clean up for SQLite)
+    try:
+        yield
+    finally:
+        await engine.dispose()
 
 
 app = FastAPI(title="Workflow API", version="1.0.0", lifespan=lifespan)
 
 app.include_router(workflow_router.router, prefix="/api/workflow", tags=["workflow"])
 app.include_router(app_router.router, prefix="/api/app", tags=["app"])
-uploads_dir = Path(__file__).resolve().parent.parent / "uploads"
+uploads_dir = get_upload_dir()
 uploads_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/api/uploads", StaticFiles(directory=uploads_dir), name="uploads")
 

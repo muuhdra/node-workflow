@@ -243,7 +243,7 @@ const TextGeneration = ({ id, data, selected }) => {
 
   const handleRunSingleNode = async () => {
     if (!runId) {
-      toast.error("No run_id available!. Click 'Run All' button");
+      toast.error("This legacy node is unavailable without workflow orchestration");
       return;
     }
 

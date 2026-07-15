@@ -270,6 +270,9 @@ const processWorkflowData = (workflowData, nodeSchemas, id) => {
       formValues: n.input_params || {},
       outputHistory: (workflowData.run_history?.[n.id] || [])
         .sort((a, b) => new Date(a.started_at) - new Date(b.started_at)),
+      isLoading: ["processing", "running"].includes(
+        workflowData.run_history?.[n.id]?.at(-1)?.status
+      ),
     }
   }));
 
@@ -320,21 +323,13 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
   const connectionMadeRef = useRef(false);
   const onConnectRef = useRef(null);
   const previousEdgesRef = useRef(initialState?.edges || initialEdges);
+  const autosaveReadyRef = useRef(false);
+  const latestWorkflowPayloadRef = useRef(null);
   const [interactionMode, setInteractionMode] = useState(initialState?.metadata?.interactionMode ?? true);
   const [isPanMode, setIsPanMode] = useState(true);
   const [modelSearch, setModelSearch] = useState("");
   const [isPresetsDismissed, setIsPresetsDismissed] = useState(true);
   const [isRestoring, setIsRestoring] = useState(!initialState);
-  const [totalWorkflowCost, setTotalWorkflowCost] = useState(0);
-
-  useEffect(() => {
-    const total = nodes.reduce((sum, node) => {
-      const cost = parseFloat(node.data?.cost) || 0;
-      return sum + cost;
-    }, 0);
-    setTotalWorkflowCost(total.toFixed(3));
-  }, [nodes]);
-
   // Sync global store with initial data if provided
   useEffect(() => {
     if (initialState?.metadata) {
@@ -431,6 +426,9 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
         formValues: n.input_params || {},
         outputHistory: (workflowData.run_history?.[n.id] || [])
           .sort((a, b) => new Date(a.started_at) - new Date(b.started_at)),
+        isLoading: ["processing", "running"].includes(
+          workflowData.run_history?.[n.id]?.at(-1)?.status
+        ),
       }
     }));
 
@@ -1098,26 +1096,37 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
     };
   };
 
-  const handleSaveWorkFlow = async () => {
+  const saveWorkflowPayload = async (
+    workflowPayload,
+    { silent = false, styleEdges = false } = {},
+  ) => {
     if (!interactionMode) return;
-    const workflowPayload = buildWorkflowPayload();
-    setEdges(styleWorkflowEdges(nodes, workflowPayload.edges, nodeSchemas));
+    if (styleEdges) {
+      setEdges(styleWorkflowEdges(nodes, workflowPayload.edges, nodeSchemas));
+    }
 
     try {
       const response = await axios.post("/api/workflow/create", workflowPayload);
-      console.log("Workflow created:", response.data);
-      setDropDown(0);
+      if (!silent) setDropDown(0);
       setWorkflowIds(response.data.workflow_id, runId);
       setWorkflowId(response.data.workflow_id);
       return response.data.workflow_id;
     } catch (error) {
-      console.log(error);
-      if (error.response) {
+      console.warn("Workflow save failed", error);
+      if (silent) {
+        toast.error("Autosave failed");
+      } else if (error.response) {
         toast.error(`Failed: ${error.response.data.detail || "Server error"}`);
       } else {
         toast.error(`Error: ${error.message}`);
       }
     }
+  };
+
+  const handleSaveWorkFlow = async () => {
+    const workflowPayload = buildWorkflowPayload();
+    latestWorkflowPayloadRef.current = workflowPayload;
+    return saveWorkflowPayload(workflowPayload, { styleEdges: true });
   };
 
   const handleDuplicateWorkflow = async () => {
@@ -1141,160 +1150,41 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
   };
 
   useEffect(() => {
-    const handleBeforeUnload = (e) => {
-      handleSaveWorkFlow();
-    };
+    if (isRestoring || !interactionMode) return;
 
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-    };
-  }, [handleSaveWorkFlow]);
-
-  const pollRunIdStatus = (runId) => {
-    const interval = setInterval(() => {
-      axios.get(`/api/workflow/run/${runId}/status`)
-        .then((response) => {
-          const runData = response.data;
-          const nodesStatus = runData?.nodes || {};
-          setWorkflowIds(workflowId, runId);
-
-          Object.entries(nodesStatus).forEach(([id, runs]) => {
-            if (!runs || runs.length === 0) return;
-
-            const latestRun = runs[runs.length - 1];
-            const status = latestRun?.status;
-            const result = latestRun?.result;
-            const outputs = result?.outputs || [];
-            const first = outputs?.[0]?.value || "";
-
-            if (status === "processing" || status === "running") {
-              setLoadingNodes((prev) => ({ ...prev, [id]: true }));
-              return;
-            } else {
-              setLoadingNodes((prev) => {
-                const copy = { ...prev };
-                delete copy[id];
-                return copy;
-              });
-            }
-
-            if (status === "succeeded" || status === "completed") {
-              setLoadingNodes((prev) => {
-                const copy = { ...prev };
-                delete copy[id];
-                return copy;
-              });
-
-              setNodes((prevNodes) => {
-                let updatedNodes = prevNodes.map((node) => {
-                  const nodeIdMatch = id.toLowerCase().replace(/\s+/g, '') === node.id.toLowerCase().replace(/\s+/g, '');
-                  if (!nodeIdMatch || !result) return node;
-
-                  if (["textNode", "imageNode", "videoNode", "audioNode", "concatNode", "apiNode", "vidConcatNode", "referenceNode"].includes(node.type)) {
-                    const currentHistory = node.data.outputHistory || [];
-                    const isAlreadyInHistory = currentHistory.some(h => h.result?.id === result.id);
-                    const newHistory = isAlreadyInHistory
-                      ? currentHistory.map(h => h.result?.id === result.id ? latestRun : h)
-                      : [...currentHistory, latestRun];
-
-                    return {
-                      ...node,
-                      data: {
-                        ...node.data,
-                        outputs,
-                        resultUrl: first,
-                        isLoading: false,
-                        errorMsg: null,
-                        outputHistory: newHistory,
-                      },
-                    };
-                  }
-
-                  return node;
-                });
-
-                updatedNodes = updatedNodes.map((node) => {
-                  if (node.id === id) {
-                    return node;
-                  }
-                  return node;
-                });
-
-                return updatedNodes;
-              });
-
-              onDataChange(id, { outputs, resultUrl: first, isLoading: false });
-            } else if (status === "failed") {
-              setLoadingNodes((prev) => {
-                const copy = { ...prev };
-                delete copy[id];
-                return copy;
-              });
-              setNodes((prevNodes) => prevNodes.map(n => {
-                if (n.id === id) {
-                  return { ...n, data: { ...n.data, isLoading: false, errorMsg: "Generation Failed" } };
-                }
-                return n;
-              }));
-            }
-          });
-
-          const allCompleted = Object.values(nodesStatus).every(
-            (nodeRuns) => nodeRuns[0]?.status === "succeeded"
-          );
-
-          const anyFailed = Object.values(nodesStatus).some(
-            (nodeRuns) => nodeRuns[0]?.status === "failed"
-          );
-          if (allCompleted) {
-            clearInterval(interval);
-            setLoadingNodes({});
-            setIsRunning(0);
-          } else if (anyFailed) {
-            toast.error("Workflow failed on some nodes");
-            clearInterval(interval);
-            setLoadingNodes({});
-            setIsRunning(0);
-          }
-          console.log("run", runData);
-        })
-        .catch((error) => {
-          console.log(error);
-          clearInterval(interval);
-          setLoadingNodes({});
-          setIsRunning(0);
-          toast.error("Failed to get workflow status");
-        });
-    }, 3000);
-  };
-
-  const handleRunWorkflow = async () => {
-    if (!interactionMode) return;
-    try {
-      setIsRunning(1);
-      setLoadingNodes({});
-      const savedWorkflowId = await handleSaveWorkFlow();
-
-      const response = await axios.post(`/api/workflow/${workflowId}/run`, {
-        cost: totalWorkflowCost
-      });
-      console.log("run data:", response.data);
-      const newRunId = response.data.run_id;
-      setRunId(newRunId);
-      setWorkflowIds(workflowId, newRunId);
-      pollRunIdStatus(newRunId);
-    } catch (error) {
-      console.log(error);
-      if (error.response) {
-        toast.error(`Failed: ${error.response.data.detail || "Server error"}`);
-      } else {
-        toast.error(`Error: ${error.message}`);
-      }
-      setLoadingNodes({});
-      setIsRunning(0);
+    const workflowPayload = buildWorkflowPayload();
+    latestWorkflowPayloadRef.current = workflowPayload;
+    if (!autosaveReadyRef.current) {
+      autosaveReadyRef.current = true;
+      return;
     }
-  };
+
+    const timeout = setTimeout(() => {
+      saveWorkflowPayload(workflowPayload, { silent: true });
+    }, 500);
+    return () => clearTimeout(timeout);
+  }, [
+    nodes,
+    edges,
+    workflowName,
+    workflowCategory,
+    interactionMode,
+    isRestoring,
+  ]);
+
+  useEffect(() => {
+    const handlePageHide = () => {
+      const workflowPayload = latestWorkflowPayloadRef.current;
+      if (!interactionMode || !workflowPayload || !navigator.sendBeacon) return;
+      const body = new Blob([JSON.stringify(workflowPayload)], {
+        type: "application/json",
+      });
+      navigator.sendBeacon("/api/workflow/create", body);
+    };
+
+    window.addEventListener("pagehide", handlePageHide);
+    return () => window.removeEventListener("pagehide", handlePageHide);
+  }, [interactionMode]);
 
   const runNodeFromFlow = (nodeId) => {
     setNodes((nds) =>
@@ -1355,7 +1245,7 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
       nodeSchemas,
       onDataChange,
       handleSaveWorkFlow,
-      isLoading: loadingNodes[node.id] || false,
+      isLoading: loadingNodes[node.id] ?? node.data.isLoading ?? false,
       activeHandleColor,
       triggerRun: node.data.triggerRun || false,
       triggerInputs: node.data.triggerInputs || false,
@@ -1848,27 +1738,7 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
             </button>
           </div>
           <div className="flex items-center gap-2">
-            {interactionMode ? (
-              <>
-                <button
-                  type="button"
-                  suppressHydrationWarning={true}
-                  disabled={isRunning === 1 || !interactionMode}
-                  onClick={handleRunWorkflow}
-                  className="flex items-center gap-2 px-4 py-1.5 border border-gray-600/70 bg-blue-500 text-white text-sm rounded-full font-semibold group cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed hover:bg-black hover:text-white whitespace-nowrap"
-                >
-                  {isRunning === 1 ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-t-transparent border-black group-hover:border-white group-hover:border-t-transparent rounded-full animate-spin"></div> Running...
-                    </>
-                  ) : (
-                    <>
-                      <FaPlay size={16} /> Run All {parseFloat(totalWorkflowCost) > 0 && `($${totalWorkflowCost})`}
-                    </>
-                  )}
-                </button>
-              </>
-            ) : (
+            {!interactionMode && (
               <button
                 type="button"
                 suppressHydrationWarning={true}

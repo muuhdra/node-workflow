@@ -37,7 +37,7 @@ class AimlModelCatalogTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(payload["model"], "bytedance/seedream-5-0-lite")
+        self.assertEqual(payload["model"], "bytedance/seedream-5-0-lite-preview")
         self.assertEqual(payload["image_urls"], ["https://example.com/style.png"])
         self.assertEqual(payload["image_size"], {"width": 2048, "height": 2048})
         self.assertEqual(payload["response_format"], "url")
@@ -103,7 +103,7 @@ class AimlModelCatalogTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(text_payload["model"], "flux-pro/kontext/text-to-image")
+        self.assertEqual(text_payload["model"], "flux/kontext-pro/text-to-image")
         self.assertEqual(text_payload["num_images"], 1)
         self.assertEqual(text_payload["seed"], 1)
         self.assertEqual(text_payload["guidance_scale"], 1)
@@ -130,7 +130,7 @@ class AimlModelCatalogTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(payload["model"], "alibaba/wan2.6-i2v-flash")
+        self.assertEqual(payload["model"], "alibaba/wan-2-6-image-to-video-flash")
         self.assertEqual(payload["image_url"], "https://example.com/start.png")
         self.assertEqual(payload["audio_url"], "https://example.com/audio.mp3")
         self.assertEqual(payload["resolution"], "720p")
@@ -178,7 +178,7 @@ class AimlModelCatalogTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(payload["model"], "veo3.1/fast/image-to-video")
+        self.assertEqual(payload["model"], "google/veo-3.1-i2v-fast")
         self.assertEqual(payload["image_url"], "https://example.com/start.png")
         self.assertEqual(payload["provider"], "auto")
         self.assertEqual(payload["aspect_ratio"], "16:9")
@@ -227,6 +227,19 @@ class AimlModelCatalogTests(unittest.TestCase):
         self.assertNotIn("videos_list", payload)
 
     def test_cost_estimates_are_local_and_duration_aware(self):
+        self.assertEqual(
+            calculate_generation_cost(
+                "google/nano-banana-2",
+                {"num_outputs": 3},
+            ),
+            0.117,
+        )
+        self.assertIsNone(
+            calculate_generation_cost(
+                "alibaba/wan-2-6-image-to-video-flash",
+                {"duration": 5, "resolution": "720p"},
+            )
+        )
         self.assertEqual(
             calculate_generation_cost(
                 "klingai/video-v2-6-pro-image-to-video",

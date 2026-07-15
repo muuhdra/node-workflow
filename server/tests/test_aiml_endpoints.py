@@ -7,12 +7,18 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services.aiml_client import submit_node
 
 
 class AimlEndpointTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.client = TestClient(app)
+        cls.client.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client.__exit__(None, None, None)
 
     def test_node_schema_endpoint_returns_selected_provider_catalog(self):
         response = self.client.get("/api/workflow/local/node-schemas")
@@ -34,7 +40,18 @@ class AimlEndpointTests(unittest.TestCase):
                 self.assertEqual(len(list(Path(directory).iterdir())), 1)
 
     def test_generation_without_aiml_key_returns_a_clear_error(self):
-        with patch.dict(os.environ, {"AIMLAPI_KEY": ""}):
+        async def submit_validated_node(workflow_id, node_id, payload):
+            return await submit_node(
+                workflow_id,
+                node_id,
+                payload["model"],
+                payload["params"],
+            )
+
+        with patch.dict(os.environ, {"AIMLAPI_KEY": ""}), patch(
+            "app.routers.workflow_router.run_node_helper",
+            side_effect=submit_validated_node,
+        ):
             response = self.client.post(
                 "/api/workflow/local/node/image1/run",
                 json={

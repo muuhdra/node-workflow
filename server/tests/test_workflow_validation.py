@@ -5,12 +5,15 @@ from fastapi import HTTPException
 from app.utils.workflow_helper import _validate_workflow_graph
 
 
-def node(node_id, category="text", input_params=None):
-    return {
+def node(node_id, category="text", input_params=None, model=None):
+    result = {
         "id": node_id,
         "category": category,
         "input_params": input_params or {"prompt": ""},
     }
+    if model:
+        result["model"] = model
+    return result
 
 
 def edge(
@@ -52,6 +55,34 @@ class WorkflowGraphValidationTests(unittest.TestCase):
         malformed["input_params"] = "not-an-object"
         payload = {"data": {"nodes": [malformed]}, "edges": []}
         self.assert_invalid(payload, "input_params must be an object")
+
+    def test_rejects_invalid_input_image_identity(self):
+        invalid_values = (
+            ({"node_label": {"name": "Maya"}}, "node_label must be a string"),
+            ({"node_label": "A" * 61}, "node_label must contain at most 60"),
+            ({"node_description": ["red coat"]}, "node_description must be a string"),
+            (
+                {"node_description": "B" * 181},
+                "node_description must contain at most 180",
+            ),
+        )
+
+        for input_params, message in invalid_values:
+            with self.subTest(message=message):
+                payload = {
+                    "data": {
+                        "nodes": [
+                            node(
+                                "image1",
+                                "image",
+                                input_params,
+                                "image-passthrough",
+                            )
+                        ]
+                    },
+                    "edges": [],
+                }
+                self.assert_invalid(payload, message)
 
     def test_rejects_edges_that_reference_missing_nodes(self):
         payload = {
@@ -116,6 +147,94 @@ class WorkflowGraphValidationTests(unittest.TestCase):
             ],
         }
         self.assert_invalid(payload, "cycle")
+
+    def test_rejects_unknown_and_incompatible_handles(self):
+        unknown = {
+            "data": {
+                "nodes": [node("text1"), node("image1", "image")],
+            },
+            "edges": [
+                edge(
+                    "edge1",
+                    "text1",
+                    "image1",
+                    source_handle="doesNotExist",
+                    target_handle="alsoMissing",
+                )
+            ],
+        }
+        self.assert_invalid(unknown, "Unknown source handle")
+
+        incompatible = {
+            "data": {
+                "nodes": [node("image1", "image"), node("text1")],
+            },
+            "edges": [
+                edge(
+                    "edge1",
+                    "image1",
+                    "text1",
+                    source_handle="imageOutput",
+                    target_handle="textInput",
+                )
+            ],
+        }
+        self.assert_invalid(incompatible, "Incompatible connector types")
+
+    def test_rejects_handle_not_exposed_by_selected_model(self):
+        payload = {
+            "data": {
+                "nodes": [
+                    node("videoSource", "video"),
+                    node(
+                        "videoTarget",
+                        "video",
+                        model="klingai/video-v2-6-pro-image-to-video",
+                    ),
+                ],
+            },
+            "edges": [
+                edge(
+                    "edge1",
+                    "videoSource",
+                    "videoTarget",
+                    source_handle="videoOutput",
+                    target_handle="videoInput7",
+                )
+            ],
+        }
+        self.assert_invalid(payload, "Unknown target handle")
+
+    def test_accepts_reference_and_text_inputs_for_image_generation(self):
+        payload = {
+            "data": {
+                "nodes": [
+                    node("text1", model="text-passthrough"),
+                    node(
+                        "reference1",
+                        "utility",
+                        model="reference-images",
+                    ),
+                    node(
+                        "image1",
+                        "image",
+                        model="google/nano-banana-2",
+                    ),
+                ],
+            },
+            "edges": [
+                edge("edge1", "text1", "image1", target_handle="imageInput"),
+                edge(
+                    "edge2",
+                    "reference1",
+                    "image1",
+                    source_handle="imageOutput",
+                    target_handle="imageInput2",
+                ),
+            ],
+        }
+
+        _validate_workflow_graph(payload)
 
 
 if __name__ == "__main__":

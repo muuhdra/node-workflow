@@ -4,11 +4,12 @@ import { FaAngleDown, FaAngleLeft, FaAngleRight } from "react-icons/fa6";
 import { getRunId, getWorkflowId } from "./WorkflowStore";
 import axios from "axios";
 import { toast } from "react-hot-toast";
-import { IoImageOutline, IoPlay, IoSettingsOutline, IoTrashOutline } from "react-icons/io5";
+import { IoCheckmark, IoClose, IoImageOutline, IoPencilOutline, IoPlay, IoSettingsOutline, IoTrashOutline } from "react-icons/io5";
 import UploadNode from "./UploadNode";
 import NodeSendButton from "./NodeSendButton";
 import NodeOptionsMenu from "./NodeOptionsMenu";
 import { useGenerationCost } from "./useGenerationCost";
+import { getInputImageIdentity, sanitizeNodeIdentity } from "./nodeIdentity";
 
 const inputHandles = [
   "imageInput",
@@ -36,6 +37,8 @@ const ImageGeneration = ({ id, data, selected }) => {
   const [connectedInputs, setConnectedInputs] = useState({});
   const [connectedOutputs, setConnectedOutputs] = useState({});
   const [formValues, setFormValues] = useState(data.formValues || {});
+  const [isIdentityEditing, setIsIdentityEditing] = useState(false);
+  const [identityDraft, setIdentityDraft] = useState(() => getInputImageIdentity(data.formValues, id));
   const [dropDown, setDropDown] = useState(0);
   const [loading, setLoading] = useState(0);
   const [currentHistoryIndex, setCurrentHistoryIndex] = useState(-1);
@@ -43,6 +46,7 @@ const ImageGeneration = ({ id, data, selected }) => {
   const [imageMetadata, setImageMetadata] = useState({ width: 0, height: 0, size: null });
   const outputHistory = data.outputHistory || [];
   const prevHistoryLengthRef = useRef(outputHistory.length);
+  const resumedRunRef = useRef(null);
   const workflowId = getWorkflowId();
   const runId = data.runId ?? getRunId();
   const nodeSchemas = data.nodeSchemas || {};
@@ -131,7 +135,7 @@ const ImageGeneration = ({ id, data, selected }) => {
     );
 
     // Preserve UI-only flags that are not part of the model schema
-    const UI_KEYS = ["make_output", "make_input"];
+    const UI_KEYS = ["make_output", "make_input", "node_label", "node_description"];
     UI_KEYS.forEach((k) => {
       if (data.formValues?.[k] !== undefined) merged[k] = data.formValues[k];
     });
@@ -248,6 +252,12 @@ const ImageGeneration = ({ id, data, selected }) => {
     }, 3000);
   };
 
+  useEffect(() => {
+    if (!data.isLoading || !runId || resumedRunRef.current === runId) return;
+    resumedRunRef.current = runId;
+    pollNodeStatus(runId);
+  }, [data.isLoading, runId]);
+
   const handleRunSingleNode = async () => {
     try {
       data.onDataChange(id, { isLoading: true });
@@ -306,9 +316,36 @@ const ImageGeneration = ({ id, data, selected }) => {
 
   const currentModelId = selectedModel?.id || data.selectedModel?.id || "";
   const isGeneratorModel = !currentModelId.includes("passthrough");
+  const inputImageIdentity = useMemo(
+    () => getInputImageIdentity(formValues, id),
+    [formValues, id]
+  );
   const hasPrompt = isGeneratorModel && (properties ? "prompt" in properties : true);
   const hasImagesList = isGeneratorModel && (properties ? "images_list" in properties : true);
   const hasImageUrl = isGeneratorModel && (properties ? "image_url" in properties : false);
+
+  useEffect(() => {
+    if (!isIdentityEditing) setIdentityDraft(inputImageIdentity);
+  }, [inputImageIdentity.label, inputImageIdentity.description, isIdentityEditing]);
+
+  const openIdentityEditor = (event) => {
+    event.stopPropagation();
+    setIdentityDraft(inputImageIdentity);
+    setIsIdentityEditing(true);
+  };
+
+  const closeIdentityEditor = (event) => {
+    event.stopPropagation();
+    setIdentityDraft(inputImageIdentity);
+    setIsIdentityEditing(false);
+  };
+
+  const saveIdentity = (event) => {
+    event.stopPropagation();
+    const identity = sanitizeNodeIdentity(identityDraft);
+    setFormValues((current) => ({ ...current, ...identity }));
+    setIsIdentityEditing(false);
+  };
 
   useEffect(() => {
     if (!isGeneratorModel) return;
@@ -633,9 +670,22 @@ const ImageGeneration = ({ id, data, selected }) => {
 
       <div className="absolute -top-9 left-6 flex items-center gap-2">
         <IoImageOutline size={18} className="text-zinc-300" />
-        <h4 className="text-base font-black tracking-tight text-zinc-100">
-          Image Generator #{id.replace(/^\D+/g, "") || "1"}
+        <h4 className="max-w-[520px] truncate text-base font-black tracking-tight text-zinc-100" title={currentModelId === "image-passthrough" ? inputImageIdentity.label : undefined}>
+          {currentModelId === "image-passthrough"
+            ? inputImageIdentity.label
+            : `Image Generator #${id.replace(/^\D+/g, "") || "1"}`}
         </h4>
+        {currentModelId === "image-passthrough" && (
+          <button
+            type="button"
+            onPointerDown={stopNodeDrag}
+            onClick={openIdentityEditor}
+            className={`nodrag nowheel flex h-6 w-6 items-center justify-center rounded-full text-zinc-500 transition hover:bg-white/10 hover:text-white ${selected ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
+            title="Rename input image"
+          >
+            <IoPencilOutline size={14} />
+          </button>
+        )}
         {generationCost !== null && isGeneratorModel && (
           <span className="flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-bold text-zinc-300">
             {isRefreshingCost ? (
@@ -649,6 +699,62 @@ const ImageGeneration = ({ id, data, selected }) => {
 
       {inputHandleItems.map(renderInputHandle)}
       {renderOutputHandle()}
+
+      {currentModelId === "image-passthrough" && inputImageIdentity.description && !isIdentityEditing && (
+        <div className="pointer-events-none absolute left-16 right-20 top-5 z-20 max-h-24 overflow-hidden rounded-lg border border-white/10 bg-black/65 px-3 py-2 text-sm leading-relaxed text-zinc-200 shadow-lg backdrop-blur-sm">
+          {inputImageIdentity.description}
+        </div>
+      )}
+
+      {currentModelId === "image-passthrough" && isIdentityEditing && (
+        <div
+          className="nodrag nowheel absolute left-5 right-20 top-5 z-50 flex flex-col gap-3 rounded-xl border border-emerald-500/30 bg-[#101010]/95 p-4 shadow-2xl backdrop-blur-xl"
+          onPointerDown={stopNodeDrag}
+        >
+          <input
+            autoFocus
+            value={identityDraft.label}
+            maxLength={60}
+            onChange={(event) => setIdentityDraft((current) => ({ ...current, label: event.target.value }))}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") saveIdentity(event);
+              if (event.key === "Escape") closeIdentityEditor(event);
+            }}
+            placeholder="Name"
+            className="h-10 w-full rounded-lg border border-white/10 bg-white/5 px-3 text-sm font-bold text-white outline-none transition focus:border-emerald-400/60"
+          />
+          <textarea
+            value={identityDraft.description}
+            maxLength={180}
+            rows={2}
+            onChange={(event) => setIdentityDraft((current) => ({ ...current, description: event.target.value }))}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") closeIdentityEditor(event);
+              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") saveIdentity(event);
+            }}
+            placeholder="Short description"
+            className="w-full resize-none rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm leading-relaxed text-zinc-200 outline-none transition focus:border-emerald-400/60"
+          />
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={closeIdentityEditor}
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-white/5 text-zinc-400 transition hover:bg-white/10 hover:text-white"
+              title="Cancel"
+            >
+              <IoClose size={19} />
+            </button>
+            <button
+              type="button"
+              onClick={saveIdentity}
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-500 text-emerald-950 transition hover:bg-emerald-400"
+              title="Save"
+            >
+              <IoCheckmark size={20} />
+            </button>
+          </div>
+        </div>
+      )}
 
       {outputHistory.length > 0 && (
         <div className="absolute -top-12 right-2 z-30 flex items-center gap-1 rounded-full border border-white/10 bg-[#101010]/95 p-1 shadow-xl">
